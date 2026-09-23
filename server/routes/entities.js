@@ -61,8 +61,10 @@ r.get('/licensees/:id', requireAuth, (req, res) => {
       WHERE c.licensee_id=? ORDER BY c.fiscal_year DESC, c.transfer_date DESC`).all(id);
   row.declarations = db.prepare('SELECT * FROM compliance_declarations WHERE licensee_id=? ORDER BY fiscal_year DESC').all(id);
   row.applications = db.prepare('SELECT * FROM applications WHERE subject_kind=\'licensee\' AND subject_id=? ORDER BY submitted_at DESC').all(id);
+  // المادة 26/3: لا يُخطَر المرخَّص له بموعد أي زيارة غير معلنة — فلا تظهر له قبل تنفيذها
+  const hideUnannounced = !hasPerm(req.user, 'audit.view.all') ? "AND (a.audit_type != 'unannounced' OR a.executed_date IS NOT NULL)" : '';
   row.audits = db.prepare(`SELECT a.*, u.full_name assessor_name FROM audits a LEFT JOIN users u ON u.id=a.assessor_id
-      WHERE a.subject_kind='licensee' AND a.subject_id=? ORDER BY a.scheduled_date DESC`).all(id);
+      WHERE a.subject_kind='licensee' AND a.subject_id=? ${hideUnannounced} ORDER BY a.scheduled_date DESC`).all(id);
   row.sanctions = db.prepare(`SELECT s.*, v.case_ar violation_text FROM sanctions s LEFT JOIN violation_codes v ON v.code=s.violation_code
       WHERE s.subject_kind='licensee' AND s.subject_id=? ORDER BY s.decided_at DESC`).all(id);
   row.invoices = db.prepare('SELECT * FROM invoices WHERE subject_kind=\'licensee\' AND subject_id=? ORDER BY issued_at DESC').all(id);
@@ -99,19 +101,35 @@ r.patch('/licensees/:id', requireAuth, (req, res) => {
   const before = db.prepare('SELECT * FROM licensees WHERE id=?').get(id);
   if (!before) return res.status(404).json({ error: 'غير موجود' });
   // الشريك لا يعدّل حالته ولا مستواه ولا رقم ترخيصه
-  const selfFields = ['trade_name','sector','city','address','contact_name','contact_email','contact_phone','website','annual_revenue','net_profit','fiscal_year','scope_desc'];
-  const adminFields = [...selfFields,'legal_name','legal_form','commercial_reg','tax_file_no','social_sec_no','region','tier_code','scope_type','excluded','exclusion_reason','partner_class'];
+  // صاحب الملف يعدّل بيانات التواصل فقط؛ الأرقام التي تحدد الشريحة والرسم والمستوى تُعدَّل من الأمانة بعد التحقق
+  // من الإثبات المالي (المادة 23) — وإلا خفّض الشريك شريحته ورسمه بنفسه
+  const selfFields = ['trade_name','city','address','contact_name','contact_email','contact_phone','website'];
+  const adminFields = [...selfFields,'sector','annual_revenue','net_profit','fiscal_year','scope_desc','legal_name','legal_form',
+    'commercial_reg','tax_file_no','social_sec_no','region','scope_type','excluded','exclusion_reason','partner_class'];
+  // الحقول غير المسموحة للمستدعي تُهمَل قبل أي تحقق أو أثر جانبي (مثل إعادة احتساب الشريحة)
   const fields = all ? adminFields : selfFields;
+  const ignored = Object.keys(req.body).filter((k) => !fields.includes(k));
+  req.body = Object.fromEntries(Object.entries(req.body).filter(([k]) => fields.includes(k)));
+  const NUM = { annual_revenue: [0.01, 1e12], net_profit: [-1e12, 1e12], fiscal_year: [2000, 2100] };
+  for (const [k, [lo, hi]] of Object.entries(NUM)) if (k in req.body) {
+    const v = Number(req.body[k]);
+    if (req.body[k] === '' || req.body[k] == null || !Number.isFinite(v) || v < lo || v > hi) return res.status(400).json({ error: `قيمة ${k} غير صالحة` });
+    req.body[k] = v;
+  }
+  if ('region' in req.body && !['الغربية','الشرقية','الجنوبية'].includes(req.body.region)) return res.status(400).json({ error: 'المنطقة غير صالحة' });
+  if ('scope_type' in req.body && !['enterprise','brand','product_line'].includes(req.body.scope_type)) return res.status(400).json({ error: 'النطاق غير صالح' });
+  if ('partner_class' in req.body && !['none','founding','working','honorary'].includes(req.body.partner_class)) return res.status(400).json({ error: 'صفة الشراكة غير صالحة' });
+  if ('excluded' in req.body) req.body.excluded = req.body.excluded ? 1 : 0;
   const sets = [], vals = [];
   for (const f of fields) if (f in req.body) { sets.push(`${f}=?`); vals.push(req.body[f]); }
-  if (!sets.length) return res.status(400).json({ error: 'لا توجد حقول للتحديث' });
+  if (!sets.length) return res.status(400).json({ error: 'لا توجد حقول مسموح لك بتحديثها', ignored });
   // إعادة احتساب الشريحة من الإيراد
   if ('annual_revenue' in req.body) { sets.push('tier_code=?'); vals.push(R.tierFor(req.body.annual_revenue).code); }
   sets.push("updated_at=datetime('now')");
   db.prepare(`UPDATE licensees SET ${sets.join(',')} WHERE id=?`).run(...vals, id);
   const after = db.prepare('SELECT * FROM licensees WHERE id=?').get(id);
   log(req, 'licensee.update', 'licensee', id, 'تحديث بيانات مرخَّص له', before, after);
-  res.json(after);
+  res.json({ ...after, ignored_fields: ignored.length ? ignored : undefined });
 });
 
 // ---------- المنظمات ----------
@@ -166,8 +184,9 @@ r.get('/associations/:id', requireAuth, (req, res) => {
       LEFT JOIN eligible_channels ec ON ec.code=c.channel
       WHERE c.association_id=? ORDER BY c.transfer_date DESC`).all(id);
   row.applications = db.prepare("SELECT * FROM applications WHERE subject_kind='association' AND subject_id=? ORDER BY submitted_at DESC").all(id);
+  const hideUnannounced = !hasPerm(req.user, 'audit.view.all') ? "AND (a.audit_type != 'unannounced' OR a.executed_date IS NOT NULL)" : '';
   row.audits = db.prepare(`SELECT a.*, u.full_name assessor_name FROM audits a LEFT JOIN users u ON u.id=a.assessor_id
-      WHERE a.subject_kind='association' AND a.subject_id=? ORDER BY a.scheduled_date DESC`).all(id);
+      WHERE a.subject_kind='association' AND a.subject_id=? ${hideUnannounced} ORDER BY a.scheduled_date DESC`).all(id);
   row.sanctions = db.prepare(`SELECT s.*, v.case_ar violation_text FROM sanctions s LEFT JOIN violation_codes v ON v.code=s.violation_code
       WHERE s.subject_kind='association' AND s.subject_id=? ORDER BY s.decided_at DESC`).all(id);
 
@@ -190,11 +209,25 @@ r.patch('/associations/:id', requireAuth, (req, res) => {
     return res.status(403).json({ error: 'لا تملك صلاحية تحديث هذا الملف' });
   const before = db.prepare('SELECT * FROM associations WHERE id=?').get(id);
   if (!before) return res.status(404).json({ error: 'غير موجود' });
-  const selfFields = ['city','address','contact_name','contact_email','contact_phone','focus_areas',
-    'board_size','paid_board_members','board_meetings_last_year','annual_revenue','total_expenses','admin_expenses',
-    'fundraising_cost_ratio','largest_budget_3y'];
-  const adminFields = [...selfFields,'name','registration_no','registration_authority','region','established_year','audit_tier','partner_class'];
+  // المنظمة تعدّل بيانات التواصل فقط؛ الأرقام التي يُحسب منها التصنيف المنشور وسقف الاستيعاب والمعايير
+  // تُعدَّل من الأمانة بعد مطابقتها مع القوائم المالية المدققة (المادة 14 و15)
+  const selfFields = ['city','address','contact_name','contact_email','contact_phone','focus_areas'];
+  const adminFields = [...selfFields,'board_size','paid_board_members','board_meetings_last_year','annual_revenue','total_expenses',
+    'admin_expenses','fundraising_cost_ratio','largest_budget_3y','name','registration_no','registration_authority','region',
+    'established_year','partner_class'];
   const fields = all ? adminFields : selfFields;
+  req.body = Object.fromEntries(Object.entries(req.body).filter(([k]) => fields.includes(k)));
+  const NUM = { board_size: [0, 100], paid_board_members: [0, 100], board_meetings_last_year: [0, 100], annual_revenue: [0, 1e12],
+    total_expenses: [0, 1e12], admin_expenses: [0, 1e12], fundraising_cost_ratio: [0, 1], largest_budget_3y: [0, 1e12], established_year: [1900, 2100] };
+  for (const [k, [lo, hi]] of Object.entries(NUM)) if (k in req.body) {
+    const v = Number(req.body[k]);
+    if (req.body[k] === '' || req.body[k] == null || !Number.isFinite(v) || v < lo || v > hi) return res.status(400).json({ error: `قيمة ${k} غير صالحة` });
+    req.body[k] = v;
+  }
+  const merged = { ...before, ...req.body };
+  if (all && Number(merged.admin_expenses) > Number(merged.total_expenses)) return res.status(422).json({ error: 'المصروفات الإدارية لا تتجاوز الإجمالي' });
+  if ('region' in req.body && !['الغربية','الشرقية','الجنوبية'].includes(req.body.region)) return res.status(400).json({ error: 'المنطقة غير صالحة' });
+  if ('partner_class' in req.body && !['none','founding','working','honorary'].includes(req.body.partner_class)) return res.status(400).json({ error: 'صفة الشراكة غير صالحة' });
   const sets = [], vals = [];
   for (const f of fields) if (f in req.body) { sets.push(`${f}=?`); vals.push(req.body[f]); }
   if (!sets.length) return res.status(400).json({ error: 'لا توجد حقول للتحديث' });
@@ -216,7 +249,11 @@ r.patch('/associations/:id', requireAuth, (req, res) => {
 r.post('/associations/:id/criteria', requireAuth, can('org.assess_criteria'), (req, res) => {
   const id = Number(req.params.id);
   const { cycle_year, items } = req.body;
-  if (!Array.isArray(items)) return res.status(400).json({ error: 'items مطلوبة' });
+  if (!Array.isArray(items) || !items.length) return res.status(400).json({ error: 'items مطلوبة' });
+  if (!db.prepare('SELECT 1 FROM associations WHERE id=?').get(id)) return res.status(404).json({ error: 'غير موجود' });
+  for (const it of items)
+    if (!it || !(Number.isInteger(Number(it.criterion_no)) && it.criterion_no >= 1 && it.criterion_no <= 15) || !['met','not_met','partial','na'].includes(it.result))
+      return res.status(400).json({ error: 'كل بند: رقم معيار من 1 إلى 15 ونتيجة (met/not_met/partial/na)' });
   const st = db.prepare(`INSERT INTO criteria_assessments
     (association_id, criterion_no, cycle_year, result, measured_value, note, evidence_doc_id, assessed_by)
     VALUES (?,?,?,?,?,?,?,?)

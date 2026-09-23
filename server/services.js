@@ -163,5 +163,11 @@ function createSanction(actorId, { subject_kind, subject_id, subject_name, viola
   return db.prepare('SELECT * FROM sanctions WHERE id=?').get(id);
 }
 
-module.exports = { today, nextRef, ALLOWED_UPLOADS, uploadAllowed, storeUpload, discardUpload, notify, ownerOf,
+/** تعارض مصالح معلن في إقرار المصالح السنوي — الصيغة «(الملف N)» (المادة 20/4 و27) */
+function hasConflict(userId, subjectId) {
+  return !!db.prepare(`SELECT 1 FROM integrity_pledges WHERE user_id=? AND kind='annual_interests' AND has_conflict=1
+      AND details LIKE ?`).get(userId, `%(الملف ${Number(subjectId)})%`);
+}
+
+module.exports = { hasConflict, today, nextRef, ALLOWED_UPLOADS, uploadAllowed, storeUpload, discardUpload, notify, ownerOf,
   openStages, closeStage, createApplication, createSanction };

@@ -24,7 +24,7 @@ const regHits = new Map();
 function regLimited(ip) {
   const now = Date.now(), h = (regHits.get(ip) || []).filter((t) => now - t < 3600e3);
   h.push(now); regHits.set(ip, h);
-  return h.length > 10;
+  return h.length > (Number(process.env.SEMA_REG_LIMIT) || 10);
 }
 
 /** يولّد مستند إقرار موقّعاً إلكترونياً ويقيّده في الإثباتات */
@@ -244,7 +244,7 @@ r.post('/auth/password', requireAuth, (req, res) => {
   if (pw) return res.status(422).json({ error: pw });
   if (current_password === new_password) return res.status(422).json({ error: 'اختر كلمة مرور مختلفة' });
   // الطابع الزمني بدقة الثانية: الرموز الصادرة قبل التغيير تسقط، ويُصدَر رمز جديد بعده
-  db.prepare("UPDATE users SET password_hash=?, password_changed_at=datetime('now','-1 second'), must_reset=0 WHERE id=?")
+  db.prepare("UPDATE users SET password_hash=?, password_changed_at=datetime('now'), token_version=token_version+1, must_reset=0 WHERE id=?")
     .run(bcrypt.hashSync(new_password, 10), req.user.id);
   log(req, 'user.password', 'user', req.user.id, 'تغيير كلمة المرور');
   res.json({ ok: true, token: issueToken(loadUser(req.user.id)), note: 'تغيّرت كلمة المرور وأُلغيت الجلسات الأخرى.' });

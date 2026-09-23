@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 /* ===== المنظمات · الطلبات · الإثباتات · الالتزام · المساهمات · التصاميم ===== */
-const { S, api, E, num, money, pct, dt, yr, today, days, L, lb, tag, lvlBadge, toast, modal,
+const { S, api, E, A, num, money, pct, dt, yr, today, days, L, lb, tag, lvlBadge, toast, modal,
         route, render, go, has } = window.SEMA;
 const { shell, dataTable, bars, meter, stat, alertBox, legal, card, kv, tabs, docLink } = window.UI;
 const guard = () => { if (!S.user) { location.hash = '#/login'; return false; } return true; };
@@ -291,7 +291,7 @@ function actionBtns(d) {
   if (has('app.decide') && d.status === 'decision_pending')
     b.push(`<button class="btn gold sm" onclick="APP.decideApp(${d.id},${d.requested_level || 1})">القرار المسبَّب</button>`);
   if (has('appeal.file') && d.decision === 'reject')
-    b.push(`<button class="btn sm" onclick="APP.fileAppealApp(${d.id},'${d.subject_kind}',${d.subject_id})">تقديم تظلم</button>`);
+    b.push(`<button class="btn sm" onclick="APP.fileAppealApp(${A(d.id)},${A(d.subject_kind)},${A(d.subject_id)})">تقديم تظلم</button>`);
   return b.join(' ');
 }
 

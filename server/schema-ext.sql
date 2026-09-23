@@ -46,3 +46,15 @@ CREATE TABLE IF NOT EXISTS job_runs (
   triggered_by TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_at ON job_runs(started_at);
+
+-- السجل العام يعرض الالتزام «المتحقَّق منه» فقط — لا الموثَّق بانتظار التحقق (المادة 37)
+DROP VIEW IF EXISTS v_public_registry_licensees;
+CREATE VIEW v_public_registry_licensees AS
+SELECT l.license_no, l.legal_name, l.trade_name, b.name_ar AS level_name, l.level,
+       b.color_hex, l.scope_type, l.scope_desc, l.region, l.city, l.sector,
+       l.start_date, l.end_date, l.status, l.status_reason, l.founding_partner, l.qr_token,
+       (SELECT COALESCE(SUM(ct.amount),0) FROM contributions ct WHERE ct.licensee_id=l.id AND ct.status='verified'
+          AND ct.fiscal_year=(SELECT MAX(fiscal_year) FROM commitments c WHERE c.licensee_id=l.id)) AS verified_commitment,
+       (SELECT MAX(fiscal_year) FROM commitments c WHERE c.licensee_id=l.id) AS commitment_year
+FROM licensees l LEFT JOIN brand_levels b ON b.level=l.level
+WHERE l.status IN ('active','suspended','withdrawn','expired');

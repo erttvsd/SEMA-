@@ -7,9 +7,10 @@
   "scripts": {
     "start": "node server/index.js",
     "seed": "node server/seed-run.js",
-    "test": "node tests/rules.test.js",
+    "test": "node tests/run.js",
     "docs": "node scripts/gen-docs.js",
-    "reset": "rm -rf storage && npm run seed"
+    "reset": "rm -rf storage && npm run seed",
+    "test:unit": "node tests/run.js --only=unit"
   },
   "engines": {
     "node": ">=20"

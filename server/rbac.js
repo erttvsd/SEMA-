@@ -273,7 +273,7 @@ const ROLES = [
     code: 'OBSERVER', name_ar: 'مراقب', category: 'external',
     sod: null, sort: 90,
     description: 'حق الحضور والمداخلة في اجتماعات المجلس، ولا صوت له ولا حق في الاطلاع على ملف فردي قيد التقييم (المادة 34).',
-    perms: ['registry.view','gov.attend','gov.meetings.view','report.view'],
+    perms: ['registry.view','gov.attend','report.view'],
   },
   {
     code: 'EXTERNAL_AUDITOR', name_ar: 'مراجع حسابات خارجي', category: 'external',
@@ -320,4 +320,39 @@ function permissionsFor(roleCodes) {
   return [...out];
 }
 
-module.exports = { SOD_FUNCTIONS, PERMISSIONS, PERMISSION_GROUPS, ROLES, sodConflict, permissionsFor };
+/**
+ * قواعد التعارض الإضافية المستمدة من النظام الداخلي — فوق قاعدة الوظائف الأربع:
+ *  - المدير التنفيذي لا يملك منح ترخيص أو رفضه أو تعليقه أو سحبه (المادة 25)
+ *  - عضو مجلس الأمناء لا يكون موظفاً بأجر لدى الأمانة (المادة 13)
+ *  - لجنة التظلمات من خارج المجلس واللجان (المادة 22/1)
+ *  - الأدوار الخارجية (شريك، منظمة، مراقب، مراجع خارجي) لا تُجمع مع أدوار الحوكمة أو الأمانة
+ */
+const EXEC_ROLES = ['EXEC_DIRECTOR', 'EVAL_DIRECTOR', 'ASSESSOR', 'FIELD_AUDITOR', 'REGISTRY_OFFICER',
+  'FINANCE_OFFICER', 'COMMS_OFFICER', 'ORG_RELATIONS'];
+const BOARD_ROLES = ['BOARD_MEMBER', 'BOARD_CHAIR'];
+const INTERNAL = new Set([...EXEC_ROLES, ...BOARD_ROLES, 'STANDARDS_COMMITTEE', 'LICENSING_COMMITTEE',
+  'APPEALS_COMMITTEE', 'INTEGRITY_COMMITTEE']);
+const EXTERNAL = new Set(['PARTNER_BUSINESS', 'PARTNER_ASSOCIATION', 'OBSERVER', 'EXTERNAL_AUDITOR']);
+
+function assignmentProblems(roleCodes) {
+  const set = new Set(roleCodes);
+  const has = (c) => set.has(c);
+  const problems = [];
+  const sod = sodConflict(roleCodes);
+  if (sod.conflict) problems.push(sod.message);
+  if (has('EXEC_DIRECTOR') && (has('LICENSING_COMMITTEE') || has('APPEALS_COMMITTEE')))
+    problems.push('المدير التنفيذي لا يملك أي صلاحية في منح ترخيص أو رفضه أو تعليقه أو سحبه، ولا في البتّ في التظلم (المادة 25).');
+  if (BOARD_ROLES.some(has) && EXEC_ROLES.some(has))
+    problems.push('لا يكون عضو مجلس الأمناء موظفاً بأجر لدى الأمانة (المادة 13).');
+  if (has('APPEALS_COMMITTEE') && [...BOARD_ROLES, 'STANDARDS_COMMITTEE', 'LICENSING_COMMITTEE', 'INTEGRITY_COMMITTEE', ...EXEC_ROLES].some(has))
+    problems.push('أعضاء لجنة التظلمات مستقلون من خارج المجلس واللجان والأمانة (المادة 22/1).');
+  const ext = [...set].filter((c) => EXTERNAL.has(c)), int = [...set].filter((c) => INTERNAL.has(c));
+  if (ext.length && int.length)
+    problems.push('الأدوار الخارجية (الشريك، المنظمة، المراقب، المراجع الخارجي) لا تُجمع مع أدوار الحوكمة أو الأمانة — لكل صفة حساب مستقل.');
+  if (ext.length > 1)
+    problems.push('لا يُجمع بين دورين خارجيين في حساب واحد.');
+  if (has('BOARD_CHAIR') && has('BOARD_MEMBER')) problems.push('رئيس المجلس عضو فيه أصلاً — يكفي دور الرئيس.');
+  return problems;
+}
+
+module.exports = { SOD_FUNCTIONS, PERMISSIONS, PERMISSION_GROUPS, ROLES, sodConflict, permissionsFor, assignmentProblems };

@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 /* ===== الالتزام · المساهمات · الإقرارات · التدقيق · الجزاءات · التظلمات · النزاهة · الحوكمة ===== */
-const { S, api, E, num, money, pct, dt, yr, today, days, L, lb, tag, lvlBadge, toast, modal,
+const { S, api, E, A, num, money, pct, dt, yr, today, days, L, lb, tag, lvlBadge, toast, modal,
         route, render, go, has, hasRole } = window.SEMA;
 const { shell, dataTable, bars, meter, stat, alertBox, legal, card, kv, tabs, docLink } = window.UI;
 const guard = () => { if (!S.user) { location.hash = '#/login'; return false; } return true; };
@@ -152,7 +152,7 @@ route('declarations', async () => {
       { t: 'الحالة', srt: 'status', r: (r) => tag(r.status) },
       { t: 'المخرج', r: (r) => r.outcome ? tag(r.outcome, 'outcome') : '—' },
       ...(has('commitment.declare') ? [{ t: '', r: (r) => !r.submitted_at
-        ? `<button class="btn sm primary" onclick="event.stopPropagation();APP.submitDeclaration(${r.id},'${r.tier_code}')">قدّم الإقرار</button>` : '' }] : []),
+        ? `<button class="btn sm primary" onclick="event.stopPropagation();APP.submitDeclaration(${A(r.id)},${A(r.tier_code)})">قدّم الإقرار</button>` : '' }] : []),
       ...(has('app.assess') || has('app.decide') ? [{ t: '', r: (r) => `
         ${has('app.assess') && r.submitted_at && !r.decided_at ? `<button class="btn sm" onclick="event.stopPropagation();APP.processDeclaration(${r.id})">تسجيل الوقائع</button>` : ''}
         ${has('app.decide') && r.processed_at && !r.decided_at ? `<button class="btn sm gold" onclick="event.stopPropagation();APP.decideDeclaration(${r.id})">القرار</button>` : ''}
@@ -242,7 +242,7 @@ route('audits', async (r) => {
           <div class="muted" style="white-space:normal;max-width:240px">${E(f.violation_text || '')}</div>` : '—'}</td>
         <td class="muted" style="white-space:normal;max-width:240px">${E(f.measure_ar || '—')}</td>
         ${has('sanction.decide') ? `<td>${f.violation_code
-          ? `<button class="btn sm danger" onclick="APP.newSanction('${d.subject_kind}',${d.subject_id},${f.violation_code},${d.id})">إصدار جزاء</button>` : ''}</td>` : ''}</tr>`).join('')
+          ? `<button class="btn sm danger" onclick="APP.newSanction(${A(d.subject_kind)},${A(d.subject_id)},${A(f.violation_code)},${A(d.id)})">إصدار جزاء</button>` : ''}</td>` : ''}</tr>`).join('')
         : '<tr><td colspan="6"><div class="empty"><b>لا وقائع مسجَّلة</b></div></td></tr>'}</tbody></table></div>`)}
     ${d.documents.length ? card('مستندات التدقيق', `<ul style="margin:0;padding-inline-start:20px">
       ${d.documents.map((x) => `<li>${docLink(x)} <span class="muted">${x.confidential ? '— سرّي' : ''}</span></li>`).join('')}</ul>`) : ''}
@@ -405,7 +405,8 @@ route('appeals', async () => {
         ? `${tag(r.decision, 'decision')}<div class="muted" style="white-space:normal;max-width:420px">${E(r.decision_reason || '')}</div>
            <div class="muted">${E(r.decided_by_name || '')} · ${dt(r.decided_at)}</div>` : tag(r.status) },
       ...(has('appeal.decide') ? [{ t: '', r: (r) => r.status !== 'decided'
-        ? `<button class="btn sm primary" onclick="event.stopPropagation();APP.decideAppeal(${r.id})">البتّ في التظلم</button>` : '' }] : []),
+        ? `<button class="btn sm primary" onclick="event.stopPropagation();APP.decideAppeal(${r.id})">البتّ في التظلم</button>
+           ${r.sanction_id && !r.stay_of_execution ? `<button class="btn sm" onclick="event.stopPropagation();APP.stayAppeal(${r.id})">وقف التنفيذ</button>` : ''}` : '' }] : []),
     ],
     summary: (d) => `<div class="grid g4" style="padding:12px 16px 0">
       ${stat('النتائج', num(d.total))}
@@ -466,10 +467,10 @@ route('integrity', async () => {
       <span class="tag ${n.status === 'published' ? 'danger' : n.status === 'answered' ? 'ok' : 'warn'}">${E(lb('status', n.status))}</span>
       <span class="muted">${E(n.reference)}</span>
       <span class="spacer" style="flex:1"></span>
-      ${has('integrity.publish') && n.publishable && !n.public_disclosure
+      ${has('integrity.publish') && n.publishable && !n.public_disclosure && !n.responded_at
         ? `<button class="btn danger sm" onclick="APP.publishIntegrity(${n.id})">نشر علني (انقضت المهلة)</button>` : ''}
-      ${has('gov.meetings.manage') && !n.responded
-        ? `<button class="btn primary sm" onclick="APP.respondIntegrity(${n.id})">رد المجلس</button>` : ''}</div>
+      ${hasRole('BOARD_CHAIR') || hasRole('BOARD_MEMBER') ? (!n.responded_at && !n.public_disclosure
+        ? `<button class="btn primary sm" onclick="APP.respondIntegrity(${n.id})">رد المجلس</button>` : '') : ''}</div>
       <div class="card-bd">
       <p style="font-family:var(--fs);font-size:.95rem">${E(n.body)}</p>
       ${kv([['التصنيف', E({ independence:'استقلال', pressure:'ضغط أو تدخل', conflict_of_interest:'تعارض مصالح',

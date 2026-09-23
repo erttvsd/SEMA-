@@ -7,8 +7,10 @@ function buildList(db, { table, columns, filters = {}, search = [], allowSort = 
   const where = [...extraWhere];
   const p = [...params];
 
+  const one = (v) => (Array.isArray(v) ? v[0] : v);
   for (const [key, spec] of Object.entries(filters)) {
-    const raw = req.query[key];
+    const raw = one(req.query[key]);
+    if (typeof raw === 'object' && raw !== null) continue;
     if (raw === undefined || raw === '' || raw === null) continue;
     const col = spec.col || key;
     if (spec.op === 'in') {
@@ -16,29 +18,33 @@ function buildList(db, { table, columns, filters = {}, search = [], allowSort = 
       if (!vals.length) continue;
       where.push(`${col} IN (${vals.map(() => '?').join(',')})`);
       p.push(...vals);
-    } else if (spec.op === 'gte') { where.push(`${col} >= ?`); p.push(spec.num ? Number(raw) : raw); }
-    else if (spec.op === 'lte') { where.push(`${col} <= ?`); p.push(spec.num ? Number(raw) : raw); }
+    } else if (spec.op === 'gte' || spec.op === 'lte') {
+      const v = spec.num ? Number(raw) : String(raw);
+      if (spec.num && !Number.isFinite(v)) continue;
+      where.push(`${col} ${spec.op === 'gte' ? '>=' : '<='} ?`); p.push(v);
+    }
     else if (spec.op === 'like') { where.push(`${col} LIKE ?`); p.push('%' + raw + '%'); }
     else if (spec.op === 'bool') { where.push(`${col} = ?`); p.push(raw === 'true' || raw === '1' ? 1 : 0); }
-    else { where.push(`${col} = ?`); p.push(spec.num ? Number(raw) : raw); }
+    else { const v = spec.num ? Number(raw) : String(raw); if (spec.num && !Number.isFinite(v)) continue; where.push(`${col} = ?`); p.push(v); }
   }
 
-  const q = (req.query.q || '').trim();
+  const q = String(one(req.query.q) || '').trim().slice(0, 200);
   if (q && search.length) {
     where.push('(' + search.map((c) => `${c} LIKE ?`).join(' OR ') + ')');
     search.forEach(() => p.push('%' + q + '%'));
   }
 
   let sort = defaultSort || '';
-  const reqSort = req.query.sort;
+  const reqSort = typeof one(req.query.sort) === 'string' ? one(req.query.sort) : null;
   if (reqSort) {
     const desc = reqSort.startsWith('-');
     const col = desc ? reqSort.slice(1) : reqSort;
     if (allowSort.includes(col)) sort = `${col} ${desc ? 'DESC' : 'ASC'}`;
   }
 
-  const perPage = Math.min(200, Math.max(1, Number(req.query.per_page) || 25));
-  const page = Math.max(1, Number(req.query.page) || 1);
+  const int = (v, d) => { const n = Math.floor(Number(one(v))); return Number.isFinite(n) ? n : d; };
+  const perPage = Math.min(200, Math.max(1, int(req.query.per_page, 25)));
+  const page = Math.min(1e6, Math.max(1, int(req.query.page, 1)));
   const whereSql = where.length ? 'WHERE ' + where.join(' AND ') : '';
   const total = db.prepare(`SELECT COUNT(*) n FROM ${table} ${whereSql}`).get(...p).n;
   const rows = db.prepare(

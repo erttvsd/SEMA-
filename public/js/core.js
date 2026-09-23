@@ -32,6 +32,8 @@ const num2 = (n) => n == null ? '—' : NF.format(Math.round(Number(n) * 100) / 
 const money = (n) => n == null ? '—' : NF.format(Math.round(Number(n))) + ' د.ل';
 const pct = (n, dp = 1) => n == null ? '—' : (Number(n) * 100).toFixed(dp) + '%';
 const dt = (s) => !s ? '—' : String(s).slice(0, 10);
+/** وسيط آمن لمعالجات الأحداث الداخلية: JSON يُهرَّب داخل السمة، فلا تكسر علامة اقتباس في بيانات المستخدم السمة ولا السكربت */
+const A = (v) => E(JSON.stringify(v === undefined ? null : v));
 const yr = (n) => n == null || n === '' ? '—' : String(n);  // السنوات بلا فاصل آلاف
 const today = () => new Date().toISOString().slice(0, 10);
 const days = (a, b) => Math.round((new Date(b) - new Date(a)) / 86400000);
@@ -211,5 +213,5 @@ async function boot() {
   if (!location.hash) location.hash = S.user ? '#/dashboard' : '#/';
   render();
 }
-window.SEMA = { S, api, qs, E, num, num2, money, pct, dt, yr, today, days, has, hasRole, kfmt, L, lb, tone, tag,
+window.SEMA = { S, api, qs, E, A, num, num2, money, pct, dt, yr, today, days, has, hasRole, kfmt, L, lb, tone, tag,
   lvlBadge, ic, IC, LOGO, toast, modal, route, render, go, logout, boot };

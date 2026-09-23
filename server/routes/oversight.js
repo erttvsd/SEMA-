@@ -75,9 +75,15 @@ r.get('/audits/:id', requireAuth, can('audit.view.all', 'audit.view.own'), (req,
 
 /** المادة (25)+(26): توليد خطة العيّنة عشوائياً بآلية موثّقة */
 r.post('/audits/plan', requireAuth, can('audit.plan'), (req, res) => {
-  const { fiscal_year, seed } = req.body;
-  const year = fiscal_year || new Date().getFullYear();
-  const usedSeed = seed || crypto.randomBytes(8).toString('hex');
+  const { fiscal_year, seed, commit } = req.body;
+  const year = Number(fiscal_year) || new Date().getFullYear();
+  // البصمة التي يُثبَّت بها الاختيار يولّدها الخادم نفسه — فلا يختار المخطِّط بصمة تُسقط جهة بعينها (المادة 26/2)؛
+  // وتُقبل البصمة من الطلب للتحقق من خطة سابقة فقط
+  if (commit && seed) return res.status(422).json({ error: 'تثبيت الخطة يكون ببصمة يولّدها النظام — البصمة المُدخلة للتحقق فقط' });
+  if (commit && db.prepare("SELECT 1 FROM audits WHERE fiscal_year=? AND trigger IN ('sample','mandatory','pilot_year') AND sample_seed IS NOT NULL AND status='planned' AND created_at > datetime('now','-300 day')").get(year)
+      && !req.body.replace)
+    return res.status(409).json({ error: 'ثُبّتت خطة لهذه السنة مسبقاً — لا تُكرَّر الجدولة' });
+  const usedSeed = commit ? crypto.randomBytes(8).toString('hex') : (seed ? String(seed).slice(0, 64) : crypto.randomBytes(8).toString('hex'));
   const pilot = db.prepare("SELECT v FROM settings WHERE k='pilot_year'").get()?.v === '1';
   const licensees = db.prepare("SELECT * FROM licensees WHERE status IN ('active','suspended')").all();
   const plan = [];
@@ -131,6 +137,10 @@ r.post('/audits', requireAuth, can('audit.execute', 'audit.unannounced'), (req, 
   if (!Object.keys({ desk: 1, field: 1, unannounced: 1, compliance_review: 1 }).includes(audit_type))
     return res.status(400).json({ error: 'نوع التدقيق غير صالح' });
   if (conflict) return res.status(422).json({ error: 'تعارض مصالح معلن — يُحظر على المقيّم تقييم هذه الجهة (المادة 20/4)' });
+  if (!db.prepare(`SELECT 1 FROM ${subject_kind === 'licensee' ? 'licensees' : 'associations'} WHERE id=?`).get(subject_id))
+    return res.status(404).json({ error: 'الجهة غير موجودة' });
+  if (scheduled_date && !/^\d{4}-\d{2}-\d{2}$/.test(String(scheduled_date))) return res.status(400).json({ error: 'تاريخ غير صالح' });
+  if (trigger && !['sample','mandatory','complaint','pilot_year','renewal','random'].includes(trigger)) return res.status(400).json({ error: 'سبب غير صالح' });
   const info = db.prepare(`INSERT INTO audits (reference, subject_kind, subject_id, fiscal_year, audit_type,
       trigger, scheduled_date, assessor_id, status) VALUES (?,?,?,?,?,?,?,?, 'planned')`).run(
     nextRef('AUD', 'audits'), subject_kind, subject_id, fiscal_year || new Date().getFullYear(),
@@ -220,7 +230,7 @@ r.get('/sanctions', requireAuth, can('sanction.view.all', 'registry.view'), (req
 r.post('/sanctions', requireAuth, can('sanction.decide'), (req, res) => {
   const { subject_kind, subject_id, subject_name, violation_code, measure, reason,
           source_audit_id, fine_amount, grace_days } = req.body;
-  if (!reason || reason.trim().length < 10) return res.status(422).json({ error: 'التسبيب الكتابي مطلوب' });
+  if (!reason || String(reason).trim().length < 10) return res.status(422).json({ error: 'التسبيب الكتابي مطلوب' });
   if (!['licensee', 'association', 'unlicensed'].includes(subject_kind)) return res.status(400).json({ error: 'نوع الجهة غير صالح' });
   if (!db.prepare('SELECT 1 FROM violation_codes WHERE code=?').get(violation_code))
     return res.status(400).json({ error: 'بند المخالفة غير معروف (المادة 29)' });
@@ -229,6 +239,8 @@ r.post('/sanctions', requireAuth, can('sanction.decide'), (req, res) => {
     if (!db.prepare(`SELECT 1 FROM ${t} WHERE id=?`).get(subject_id)) return res.status(404).json({ error: 'الجهة غير موجودة' });
   } else if (!subject_name) return res.status(400).json({ error: 'اسم الجهة غير المرخَّصة مطلوب' });
   if (fine_amount != null && fine_amount !== '' && !(Number(fine_amount) >= 0)) return res.status(400).json({ error: 'قيمة الغرامة غير صالحة' });
+  if (measure && !['written_warning','formal_notice','late_fine','grace_period','level_downgrade','suspension','withdrawal','cease_and_desist','fine','legal_action'].includes(measure))
+    return res.status(400).json({ error: 'الجزاء غير صالح' });
   const row = db.transaction(() => S.createSanction(req.user.id, { subject_kind, subject_id, subject_name,
     violation_code, measure, reason, source_audit_id, fine_amount, grace_days }))();
   log(req, 'sanction.decide', subject_kind, subject_id, `${row.measure}: ${reason.slice(0, 120)}`);
@@ -264,26 +276,42 @@ r.get('/appeals', requireAuth, can('appeal.view.all', 'appeal.file'), (req, res)
 });
 
 r.post('/appeals', requireAuth, can('appeal.file'), (req, res) => {
-  const { sanction_id, application_id, appellant_kind, appellant_id, grounds } = req.body;
-  if (!grounds) return res.status(400).json({ error: 'أسباب التظلم مطلوبة' });
+  const { sanction_id, application_id, appellant_kind, grounds } = req.body;
+  const appellant_id = Number(req.body.appellant_id);
+  if (!grounds || String(grounds).trim().length < 20) return res.status(400).json({ error: 'أسباب التظلم مطلوبة ومفصّلة (20 حرفاً على الأقل)' });
+  if (!['licensee', 'association'].includes(appellant_kind)) return res.status(400).json({ error: 'نوع المتظلم غير صالح' });
   const own = (appellant_kind === 'licensee' && ownsLicensee(req.user, appellant_id)) ||
               (appellant_kind === 'association' && ownsAssociation(req.user, appellant_id));
   if (!own) return res.status(403).json({ error: 'التظلم من حق صاحب الملف' });
-  // المادة 22/2: خلال ثلاثين يوماً من الإخطار
-  let notifiedAt = null;
-  if (sanction_id) notifiedAt = db.prepare('SELECT decided_at FROM sanctions WHERE id=?').get(sanction_id)?.decided_at;
-  else if (application_id) notifiedAt = db.prepare('SELECT decided_at FROM applications WHERE id=?').get(application_id)?.decided_at;
-  const today = new Date().toISOString().slice(0, 10);
-  if (notifiedAt) {
-    const deadline = R.addDays(String(notifiedAt).slice(0, 10), 30);
-    if (today > deadline)
-      return res.status(422).json({ error: `انقضت مهلة التظلم — كانت تنتهي في ${deadline} (ثلاثون يوماً من الإخطار، المادة 22/2)` });
+  if (!!sanction_id === !!application_id) return res.status(400).json({ error: 'حدّد القرار المتظلَّم منه: جزاءً أو قراراً على طلب' });
+  // المتظلَّم منه يجب أن يخصّ المتظلم نفسه، وأن يكون قراراً صادراً فعلاً
+  let notifiedAt;
+  if (sanction_id) {
+    const sn = db.prepare('SELECT * FROM sanctions WHERE id=?').get(Number(sanction_id));
+    if (!sn) return res.status(404).json({ error: 'الجزاء غير موجود' });
+    if (sn.subject_kind !== appellant_kind || Number(sn.subject_id) !== appellant_id) return res.status(403).json({ error: 'لا يُتظلَّم إلا من جزاء صادر على ملفك' });
+    if (['overturned', 'closed', 'lifted'].includes(sn.status)) return res.status(409).json({ error: 'الجزاء لم يعد قائماً' });
+    notifiedAt = sn.decided_at;
+  } else {
+    const ap = db.prepare('SELECT * FROM applications WHERE id=?').get(Number(application_id));
+    if (!ap) return res.status(404).json({ error: 'الطلب غير موجود' });
+    if (ap.subject_kind !== appellant_kind || Number(ap.subject_id) !== appellant_id) return res.status(403).json({ error: 'لا يُتظلَّم إلا من قرار على طلبك' });
+    if (!ap.decided_at) return res.status(422).json({ error: 'لا تظلم قبل صدور القرار' });
+    notifiedAt = ap.decided_at;
   }
+  const dup = db.prepare(`SELECT reference FROM appeals WHERE ${sanction_id ? 'sanction_id' : 'application_id'}=? AND status!='withdrawn'`)
+    .get(Number(sanction_id || application_id));
+  if (dup) return res.status(409).json({ error: `قُدِّم تظلم من هذا القرار مسبقاً (${dup.reference})` });
+  // المادة 22/2: خلال ثلاثين يوماً من الإخطار
+  const today = new Date().toISOString().slice(0, 10);
+  const deadline = R.addDays(String(notifiedAt).slice(0, 10), 30);
+  if (today > deadline)
+    return res.status(422).json({ error: `انقضت مهلة التظلم — كانت تنتهي في ${deadline} (ثلاثون يوماً من الإخطار، المادة 22/2)` });
   const info = db.prepare(`INSERT INTO appeals (reference, sanction_id, application_id, appellant_kind,
       appellant_id, grounds, filing_deadline, decision_due_at) VALUES (?,?,?,?,?,?,?,?)`).run(
-    nextRef('APL', 'appeals'), sanction_id || null, application_id || null, appellant_kind,
-    appellant_id, grounds, notifiedAt ? R.addDays(String(notifiedAt).slice(0, 10), 30) : null, R.addDays(today, 60));
-  if (sanction_id) db.prepare("UPDATE sanctions SET status='appealed' WHERE id=?").run(sanction_id);
+    nextRef('APL', 'appeals'), sanction_id ? Number(sanction_id) : null, application_id ? Number(application_id) : null,
+    appellant_kind, appellant_id, String(grounds), deadline, R.addDays(today, 60));
+  // لا يُغيَّر وضع الجزاء: التظلم لا يوقف تنفيذ التعليق أو السحب ولا تصعيده (المادة 22/4)
   notify({ role_code: 'APPEALS_COMMITTEE', title: 'تظلم جديد', body: 'تفصل اللجنة خلال ستين يوماً (المادة 22/3)',
     severity: 'warning', link: '#/appeals' });
   log(req, 'appeal.file', 'appeal', info.lastInsertRowid, 'تقديم تظلم');
@@ -291,26 +319,50 @@ r.post('/appeals', requireAuth, can('appeal.file'), (req, res) => {
     note: 'لا يوقف التظلم تنفيذ قرار التعليق أو السحب إلا بقرار مسبَّب من اللجنة نفسها (المادة 22/4)' });
 });
 
-r.post('/appeals/:id/decide', requireAuth, can('appeal.decide'), (req, res) => {
-  const { decision, reason, stay_of_execution, stay_reason } = req.body;
-  if (!['upheld', 'overturned', 'partially_upheld', 'inadmissible'].includes(decision))
-    return res.status(400).json({ error: 'decision غير صالح' });
-  if (!reason || reason.trim().length < 10) return res.status(422).json({ error: 'التسبيب مطلوب' });
+// وقف التنفيذ بقرار مسبَّب من لجنة التظلمات نفسها (المادة 22/4) — ويوقف التصعيد الآلي ما دام التظلم قائماً
+r.post('/appeals/:id/stay', requireAuth, can('appeal.decide'), (req, res) => {
   const ap = db.prepare('SELECT * FROM appeals WHERE id=?').get(Number(req.params.id));
   if (!ap) return res.status(404).json({ error: 'غير موجود' });
-  db.prepare(`UPDATE appeals SET decision=?, decision_reason=?, decided_at=datetime('now'), decided_by=?,
-      status='decided', stay_of_execution=?, stay_reason=? WHERE id=?`)
-    .run(decision, reason, req.user.id, stay_of_execution ? 1 : 0, stay_reason || null, ap.id);
-  if (ap.sanction_id) {
-    if (decision === 'overturned') {
-      const s = db.prepare('SELECT * FROM sanctions WHERE id=?').get(ap.sanction_id);
+  if (ap.status === 'decided') return res.status(409).json({ error: 'فُصل في التظلم' });
+  if (!ap.sanction_id) return res.status(422).json({ error: 'وقف التنفيذ يرد على الجزاءات' });
+  const reason = String(req.body.reason || '').trim();
+  if (reason.length < 10) return res.status(422).json({ error: 'وقف التنفيذ يكون بقرار مسبَّب (المادة 22/4)' });
+  db.prepare("UPDATE appeals SET stay_of_execution=1, stay_reason=?, status='under_review' WHERE id=?").run(reason, ap.id);
+  log(req, 'appeal.stay', 'appeal', ap.id, reason.slice(0, 120));
+  res.json(db.prepare('SELECT * FROM appeals WHERE id=?').get(ap.id));
+});
+
+r.post('/appeals/:id/decide', requireAuth, can('appeal.decide'), (req, res) => {
+  const { decision } = req.body;
+  const reason = String(req.body.reason || '').trim();
+  if (!['upheld', 'overturned', 'partially_upheld', 'inadmissible'].includes(decision))
+    return res.status(400).json({ error: 'decision غير صالح' });
+  if (reason.length < 10) return res.status(422).json({ error: 'التسبيب مطلوب' });
+  const ap = db.prepare('SELECT * FROM appeals WHERE id=?').get(Number(req.params.id));
+  if (!ap) return res.status(404).json({ error: 'غير موجود' });
+  if (ap.status === 'decided') return res.status(409).json({ error: 'فُصل في هذا التظلم — وقرار اللجنة نهائي داخلياً (المادة 22/3)' });
+  db.transaction(() => {
+    db.prepare(`UPDATE appeals SET decision=?, decision_reason=?, decided_at=datetime('now'), decided_by=?,
+        status='decided', stay_of_execution=0 WHERE id=?`).run(decision, reason, req.user.id, ap.id);
+    if (ap.sanction_id && decision === 'overturned') {
+      const sn = db.prepare('SELECT * FROM sanctions WHERE id=?').get(ap.sanction_id);
       db.prepare("UPDATE sanctions SET status='overturned', published=0 WHERE id=?").run(ap.sanction_id);
-      if (s.subject_kind === 'licensee' && s.subject_id)
-        db.prepare("UPDATE licensees SET status='active', status_reason=NULL WHERE id=? AND status IN ('suspended','withdrawn')").run(s.subject_id);
-      if (s.subject_kind === 'association' && s.subject_id)
-        db.prepare("UPDATE associations SET status='accredited', status_reason=NULL WHERE id=? AND status IN ('suspended','revoked')").run(s.subject_id);
-    } else db.prepare("UPDATE sanctions SET status='active' WHERE id=?").run(ap.sanction_id);
-  }
+      if (sn.subject_kind === 'licensee' && sn.subject_id) {
+        if (['suspension', 'withdrawal'].includes(sn.measure))
+          db.prepare("UPDATE licensees SET status='active', status_reason=NULL WHERE id=? AND status IN ('suspended','withdrawn')").run(sn.subject_id);
+        if (sn.measure === 'level_downgrade') db.prepare('UPDATE licensees SET level=MIN(5, level+1) WHERE id=?').run(sn.subject_id);
+      }
+      if (sn.subject_kind === 'association' && sn.subject_id && ['suspension', 'withdrawal'].includes(sn.measure))
+        db.prepare("UPDATE associations SET status='accredited', status_reason=NULL WHERE id=? AND status IN ('suspended','revoked')").run(sn.subject_id);
+    }
+    if (ap.application_id && decision === 'overturned') {
+      // إلغاء قرار الرفض يعيد الطلب إلى لجنة منح الترخيص لتُصدر قراراً جديداً مسبَّباً
+      db.prepare("UPDATE applications SET status='decision_pending', stage=7, decision=NULL, decided_at=NULL WHERE id=?").run(ap.application_id);
+      notify({ role_code: 'LICENSING_COMMITTEE', title: 'أُلغي قرار رفض بتظلم — يلزم قرار جديد', body: ap.reference, link: `#/applications/${ap.application_id}` });
+    }
+  })();
+  const owner = S.ownerOf(ap.appellant_kind, ap.appellant_id);
+  if (owner) notify({ user_id: owner, title: 'صدر قرار لجنة التظلمات', body: `${ap.reference}: ${reason.slice(0, 160)}`, link: '#/appeals' });
   log(req, 'appeal.decide', 'appeal', ap.id, `${decision}: ${reason.slice(0, 120)}`);
   res.json({ ...db.prepare('SELECT * FROM appeals WHERE id=?').get(ap.id),
     note: 'قرار اللجنة نهائي في النطاق الداخلي للعلامة، دون إخلال بحق اللجوء إلى القضاء (المادة 22/3)' });
@@ -346,9 +398,14 @@ r.post('/observers', requireAuth, can('observer.nominate', 'app.create'), (req, 
 });
 
 r.post('/observers/:id/decide', requireAuth, can('observer.admit'), (req, res) => {
-  const { decision, reason } = req.body; // admitted | rejected | ended
+  const { decision, reason } = req.body || {};
+  if (!['admitted', 'rejected', 'ended'].includes(decision)) return res.status(400).json({ error: 'القرار: قبول أو رفض أو إنهاء' });
   const o = db.prepare('SELECT * FROM observers WHERE id=?').get(Number(req.params.id));
   if (!o) return res.status(404).json({ error: 'غير موجود' });
+  if (decision === 'ended' && o.status !== 'admitted') return res.status(409).json({ error: 'الإنهاء لمراقب مقبول فقط' });
+  if (['admitted', 'rejected'].includes(decision) && o.status !== 'nominated') return res.status(409).json({ error: 'البتّ في الترشيحات القائمة فقط' });
+  if (['rejected', 'ended'].includes(decision) && (!reason || reason.trim().length < 5))
+    return res.status(422).json({ error: 'القرار المسبَّب مطلوب (المادة 34/6)' });
   if (decision === 'admitted') {
     const total = db.prepare("SELECT COUNT(*) n FROM observers WHERE status='admitted' AND cycle=?").get(o.cycle).n;
     if (total >= 5) return res.status(422).json({ error: 'بلغ عدد المراقبين المقبولين في الدورة خمسة — وهو السقف المقرر (المادة 34/3)' });
@@ -375,7 +432,7 @@ r.get('/integrity-notes', requireAuth, can('integrity.note', 'report.view'), (re
     req, extraWhere: pub ? ['n.public_disclosure=1'] : [],
   });
   const today = new Date().toISOString().slice(0, 10);
-  out.rows.forEach((x) => { x.publishable = !x.responded && x.response_due_at && x.response_due_at < today ? 1 : 0; });
+  out.rows.forEach((x) => { x.publishable = !x.responded_at && !x.public_disclosure && x.response_due_at && x.response_due_at < today ? 1 : 0; });
   out.power = 'إذا لم يُستجب لتحذيرات اللجنة خلال تسعين يوماً، كان لها نشر ملاحظاتها علناً في السجل — وهذه الصلاحية جوهرية ولا يجوز تعطيلها (المادة 23/3).';
   res.json(out);
 });
@@ -397,18 +454,24 @@ r.post('/integrity-notes/:id/publish', requireAuth, can('integrity.publish'), (r
   const n = db.prepare('SELECT * FROM integrity_notes WHERE id=?').get(Number(req.params.id));
   if (!n) return res.status(404).json({ error: 'غير موجود' });
   const today = new Date().toISOString().slice(0, 10);
-  if (n.responded && !req.body.force)
-    return res.status(422).json({ error: 'استجاب المجلس للملاحظة — النشر العلني مقرَّر لحالة عدم الاستجابة' });
-  if (!n.responded && n.response_due_at > today)
+  if (n.public_disclosure) return res.status(409).json({ error: 'نُشرت الملاحظة مسبقاً' });
+  if (n.responded_at)
+    return res.status(422).json({ error: 'استجاب المجلس للملاحظة — النشر العلني مقرَّر لحالة عدم الاستجابة (المادة 23/3)' });
+  if (n.response_due_at > today)
     return res.status(422).json({ error: `لم تنقضِ مهلة التسعين يوماً بعد — تنتهي في ${n.response_due_at} (المادة 23/3)` });
   db.prepare("UPDATE integrity_notes SET public_disclosure=1, published_at=datetime('now'), status='published' WHERE id=?").run(n.id);
   log(req, 'integrity.publish', 'integrity_note', n.id, 'نشر علني');
   res.json(db.prepare('SELECT * FROM integrity_notes WHERE id=?').get(n.id));
 });
 
-r.post('/integrity-notes/:id/respond', requireAuth, can('gov.meetings.manage'), (req, res) => {
+r.post('/integrity-notes/:id/respond', requireAuth, (req, res) => {
+  // الرد من مجلس الأمناء نفسه — لا من الأمانة التي قد تكون موضوع الملاحظة (المادة 23/3)
+  if (!req.user.role_codes.some((c) => ['BOARD_CHAIR', 'BOARD_MEMBER'].includes(c)))
+    return res.status(403).json({ error: 'الرد على ملاحظات لجنة النزاهة من اختصاص مجلس الأمناء' });
   const n = db.prepare('SELECT * FROM integrity_notes WHERE id=?').get(Number(req.params.id));
   if (!n) return res.status(404).json({ error: 'غير موجود' });
+  if (n.responded_at || n.public_disclosure) return res.status(409).json({ error: 'رُدّ على الملاحظة أو نُشرت مسبقاً' });
+  if (String(req.body.response || '').trim().length < 20) return res.status(422).json({ error: 'نص الرد والإجراء المتخذ مطلوب' });
   db.prepare("UPDATE integrity_notes SET board_response=?, responded_at=datetime('now'), status='answered' WHERE id=?")
     .run(req.body.response || '', n.id);
   log(req, 'integrity.respond', 'integrity_note', n.id, 'رد المجلس');
@@ -438,7 +501,9 @@ r.get('/complaints', requireAuth, can('complaint.triage', 'complaint.file'), (re
 
 r.post('/complaints', (req, res) => {
   const { channel, is_anonymous, reporter_name, reporter_contact, subject_kind, subject_id, subject_name, body } = req.body;
-  if (!body || body.trim().length < 10) return res.status(400).json({ error: 'نص البلاغ مطلوب' });
+  if (typeof body !== 'string' || body.trim().length < 10) return res.status(400).json({ error: 'نص البلاغ مطلوب' });
+  if (subject_kind && !['licensee', 'association', 'secretariat', 'unlicensed'].includes(subject_kind)) return res.status(400).json({ error: 'نوع الجهة غير صالح' });
+  if (channel && !['portal', 'email', 'phone', 'letter', 'field'].includes(channel)) return res.status(400).json({ error: 'القناة غير صالحة' });
   if (body.length > 5000) return res.status(400).json({ error: 'نص البلاغ طويل جداً' });
   const tracking = crypto.randomBytes(4).toString('hex').toUpperCase();
   const info = db.prepare(`INSERT INTO complaints (reference, channel, is_anonymous, reporter_name, reporter_contact,
@@ -498,6 +563,15 @@ r.post('/meetings', requireAuth, can('gov.meetings.manage'), (req, res) => {
   if (observer_ids.length && body !== 'board') return res.status(422).json({ error: 'حضور المراقبين مقصور على اجتماعات مجلس الأمناء (المادة 34)' });
   const admitted = new Set(db.prepare("SELECT id FROM observers WHERE status='admitted'").all().map((o) => o.id));
   for (const o of observer_ids) if (!admitted.has(Number(o))) return res.status(422).json({ error: `المراقب ${o} غير مقبول في الدورة` });
+  const ROLE_OF = { board: ['BOARD_MEMBER', 'BOARD_CHAIR'], general_assembly: ['GENERAL_ASSEMBLY', 'BOARD_MEMBER', 'BOARD_CHAIR', 'PARTNER_BUSINESS', 'PARTNER_ASSOCIATION'],
+    standards: ['STANDARDS_COMMITTEE'], licensing: ['LICENSING_COMMITTEE'], appeals: ['APPEALS_COMMITTEE'], integrity: ['INTEGRITY_COMMITTEE'] }[body];
+  const ids = [...new Set((Array.isArray(attendee_ids) ? attendee_ids : []).map(Number))];
+  for (const u of ids) {
+    const ok = db.prepare(`SELECT 1 FROM users u JOIN user_roles ur ON ur.user_id=u.id WHERE u.id=? AND u.status='active'
+        AND ur.role_code IN (${ROLE_OF.map(() => '?').join(',')})`).get(u, ...ROLE_OF);
+    if (!ok) return res.status(422).json({ error: `المستخدم ${u} ليس عضواً في «${body}» — لا يُحتسب في النصاب` });
+  }
+  attendee_ids.length = 0; attendee_ids.push(...ids);
   const quorum = { board: 6, general_assembly: null, standards: 3, licensing: 2, appeals: 2, integrity: 3 }[body];
   if (quorum && attendee_ids.length < quorum)
     return res.status(422).json({ error: `النصاب غير مكتمل: ${attendee_ids.length} من ${quorum} على الأقل (المادة 16)` });

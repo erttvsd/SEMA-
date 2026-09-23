@@ -56,7 +56,10 @@ r.get('/verify/:key', (req, res) => {
     l.beneficiary_associations = db.prepare(`SELECT DISTINCT a.name, a.accreditation_no, a.region
         FROM contributions c JOIN associations a ON a.id=c.association_id
         WHERE c.licensee_id=? AND c.status IN ('documented','verified')`).all(id);
-    const c = db.prepare('SELECT fiscal_year, commitment_due, total_paid FROM commitments WHERE licensee_id=? ORDER BY fiscal_year DESC LIMIT 1').get(id);
+    const c = db.prepare(`SELECT c.fiscal_year, c.commitment_due,
+        (SELECT COALESCE(SUM(amount),0) FROM contributions ct WHERE ct.licensee_id=c.licensee_id AND ct.fiscal_year=c.fiscal_year
+          AND ct.status='verified') total_paid
+        FROM commitments c WHERE c.licensee_id=? ORDER BY c.fiscal_year DESC LIMIT 1`).get(id);
     l.verified_commitment = c || null;
     l.allowed_claim = R.allowedClaim(l.level, l.license_no);
     l.published_sanctions = db.prepare(`SELECT s.case_no, v.case_ar violation, s.measure, s.reason, s.decided_at,

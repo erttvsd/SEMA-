@@ -24,6 +24,7 @@ function migrate() {
     if (!cols.includes(col)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
   };
   addCol('users', 'password_changed_at', 'password_changed_at TEXT');
+  addCol('users', 'token_version', 'token_version INTEGER NOT NULL DEFAULT 0');
   addCol('complaints', 'tracking_code', 'tracking_code TEXT');
   addCol('applications', 'resubmitted_at', 'resubmitted_at TEXT');
   addCol('applications', 'self_registered', 'self_registered INTEGER NOT NULL DEFAULT 0');

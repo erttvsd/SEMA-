@@ -176,9 +176,17 @@ function alerts() {
   return a;
 }
 
+const reportParams = (req) => {
+  const y = Number(Array.isArray(req.query.year) ? req.query.year[0] : req.query.year);
+  const region = Array.isArray(req.query.region) ? req.query.region[0] : req.query.region;
+  return { year: Number.isInteger(y) && y > 2000 && y < 2100 ? y : new Date().getFullYear(),
+    region: ['الغربية', 'الشرقية', 'الجنوبية'].includes(region) ? region : null };
+};
+
 /** التقارير الجاهزة */
 const REPORTS = {
   annual_registry: {
+    perm: 'licensee.view.all',
     title: 'التقرير السنوي — السجل والمستويات',
     note: 'المادة (6) من النظام الداخلي: النشر هو الأصل.',
     run: (p) => db.prepare(`SELECT l.license_no, l.legal_name, l.sector, l.region, l.tier_code, l.level,
@@ -189,6 +197,7 @@ const REPORTS = {
       .all(p.year, p.region || null, p.region || null),
   },
   commitment_gap: {
+    perm: 'commitment.view.all',
     title: 'فجوة الالتزام — العجز والتدرّج الجزائي',
     note: 'المادة (29) بنود 1 و3 و4.',
     run: (p) => db.prepare(`SELECT l.license_no, l.legal_name, c.fiscal_year, c.level, c.commitment_due,
@@ -198,6 +207,7 @@ const REPORTS = {
           assessment: R.deficitAssessment(x.commitment_due, x.total_paid).message })),
   },
   admin_ratio: {
+    perm: 'org.view.all',
     title: 'المنظمات المعتمدة — نسبة المصروفات الإدارية وتصنيفها',
     note: 'المادة (15): يُنشر التصنيف في السجل. ما دون 5% يستوجب فحصاً إضافياً.',
     run: () => db.prepare(`SELECT a.accreditation_no, a.name, a.region, a.annual_revenue, a.total_expenses,
@@ -207,6 +217,7 @@ const REPORTS = {
       .map((x) => ({ ...x, flag: R.classifyAdminRatio(x.admin_expense_ratio).flag })),
   },
   audit_coverage: {
+    perm: 'audit.view.all',
     title: 'تغطية التدقيق الميداني مقابل النسب المقررة',
     note: 'المادة (25) و(26): 10% على الأقل من الزيارات غير معلنة.',
     run: (p) => {
@@ -224,6 +235,7 @@ const REPORTS = {
     },
   },
   sanctions_ledger: {
+    perm: 'sanction.view.all',
     title: 'سجل الجزاءات المنشورة',
     note: 'المادة (31): يبقى السحب منشوراً اثني عشر شهراً.',
     run: () => db.prepare(`SELECT s.case_no, COALESCE(l.legal_name,o.name,s.subject_name) name,
@@ -235,6 +247,7 @@ const REPORTS = {
         ORDER BY s.decided_at DESC`).all(),
   },
   contribution_flow: {
+    perm: 'commitment.view.all',
     title: 'تدفق المساهمات — من المرخَّص لهم إلى المنظمات',
     note: 'المادة (22): سقف 60% للمنظمة الواحدة إذا تجاوز الالتزام مئة ألف دينار.',
     run: (p) => db.prepare(`SELECT l.legal_name licensee, l.license_no, l.level, a.name association,
@@ -246,6 +259,7 @@ const REPORTS = {
         GROUP BY l.id, a.id, c.channel ORDER BY amount DESC`).all(p.year),
   },
   sla_performance: {
+    perm: 'app.view.all',
     title: 'أداء المواعيد المعيارية لمراحل الطلب',
     note: 'المادة (17): تُنشر مدة المعالجة الفعلية المتوسطة في التقرير السنوي.',
     run: () => db.prepare(`SELECT s.stage, s.stage_name_ar, s.responsible_body, s.max_days,
@@ -255,6 +269,7 @@ const REPORTS = {
         GROUP BY s.stage ORDER BY s.stage`).all(),
   },
   transparency: {
+    perm: 'report.view',
     title: 'لوحة الشفافية — إنفاق الأمانة على الفئات الثلاث',
     note: 'المادة (31): تصنيف الإنفاق برامجي / جمع تمويل / إدارة عامة.',
     run: (p) => {
@@ -270,6 +285,7 @@ const REPORTS = {
     },
   },
   founding_partners: {
+    perm: 'report.view',
     title: 'الشركاء المؤسسون وفئات الشركاء',
     note: 'المادة (39): أولوية في المعالجة دون أي تخفيف في المعايير أو التدقيق.',
     run: () => ({
@@ -281,14 +297,17 @@ const REPORTS = {
   },
 };
 
-r.get('/reports', requireAuth, can('report.view'), (_req, res) => {
-  res.json({ reports: Object.entries(REPORTS).map(([k, v]) => ({ key: k, title: v.title, note: v.note })) });
+// كل تقرير يلزمه صلاحية الاطلاع على بياناته الفردية — لا يكفي report.view لرؤية ملفات الآخرين
+r.get('/reports', requireAuth, can('report.view'), (req, res) => {
+  res.json({ reports: Object.entries(REPORTS).filter(([, v]) => hasPerm(req.user, v.perm))
+    .map(([k, v]) => ({ key: k, title: v.title, note: v.note })) });
 });
 
 r.get('/reports/:key', requireAuth, can('report.view'), (req, res) => {
   const rep = REPORTS[req.params.key];
   if (!rep) return res.status(404).json({ error: 'تقرير غير معروف' });
-  const params = { year: Number(req.query.year) || new Date().getFullYear(), region: req.query.region || null };
+  if (!hasPerm(req.user, rep.perm)) return res.status(403).json({ error: 'لا تملك صلاحية الاطلاع على بيانات هذا التقرير' });
+  const params = reportParams(req);
   const data = rep.run(params);
   log(req, 'report.view', 'report', null, rep.title);
   res.json({ key: req.params.key, title: rep.title, note: rep.note, params, data });
@@ -297,11 +316,15 @@ r.get('/reports/:key', requireAuth, can('report.view'), (req, res) => {
 r.get('/reports/:key/export.csv', requireAuth, can('report.export'), (req, res) => {
   const rep = REPORTS[req.params.key];
   if (!rep) return res.status(404).json({ error: 'تقرير غير معروف' });
-  const params = { year: Number(req.query.year) || new Date().getFullYear(), region: req.query.region || null };
+  if (!hasPerm(req.user, rep.perm)) return res.status(403).json({ error: 'لا تملك صلاحية الاطلاع على بيانات هذا التقرير' });
+  const params = reportParams(req);
   let rows = rep.run(params);
   if (!Array.isArray(rows)) rows = rows.rows || [rows];
   const cols = rows.length ? Object.keys(rows[0]) : [];
-  const esc = (v) => v == null ? '' : `"${String(v).replace(/"/g, '""')}"`;
+  // منع حقن الصيغ في Excel: القيمة التي تبدأ بـ = + - @ أو محرف تحكم تُسبق بعلامة اقتباس
+  const esc = (v) => { if (v == null) return ''; let t = String(v);
+    if (/^[=+\-@\t\r]/.test(t) && !/^-?\d+(\.\d+)?$/.test(t)) t = "'" + t;
+    return `"${t.replace(/"/g, '""')}"`; };
   const csv = '﻿' + [cols.join(','), ...rows.map((r0) => cols.map((c) => esc(r0[c])).join(','))].join('\n');
   log(req, 'report.export', 'report', null, rep.title);
   res.setHeader('Content-Type', 'text/csv; charset=utf-8');
@@ -321,6 +344,10 @@ r.get('/kpis', requireAuth, can('report.view'), (_req, res) => {
 
 r.put('/kpis/:code/:year', requireAuth, can('kpi.manage'), (req, res) => {
   const { value, kind } = req.body;
+  const y = Number(req.params.year);
+  if (!db.prepare('SELECT 1 FROM kpis WHERE code=?').get(req.params.code)) return res.status(404).json({ error: 'مؤشر غير معروف' });
+  if (!(Number.isInteger(y) && y >= 1 && y <= 5) || !Number.isFinite(Number(value)) || !['actual', 'target'].includes(kind || 'actual'))
+    return res.status(400).json({ error: 'السنة من 1 إلى 5 وقيمة رقمية ونوع (actual/target)' });
   db.prepare(`INSERT INTO kpi_values (kpi_code, year_no, kind, value) VALUES (?,?,?,?)
     ON CONFLICT(kpi_code,year_no,kind) DO UPDATE SET value=excluded.value`)
     .run(req.params.code, Number(req.params.year), kind || 'actual', value);
@@ -347,7 +374,12 @@ r.get('/invoices', requireAuth, can('finance.view.all', 'licensee.view.own'), (r
     allowSort: ['issued_at', 'amount', 'due_at', 'status'], defaultSort: 'i.issued_at DESC',
     req, extraWhere: extra, params: all ? [] : (req.user.scopes.licensee.length ? req.user.scopes.licensee : [0]),
   });
-  out.summary = db.prepare(`SELECT status, COUNT(*) n, COALESCE(SUM(amount),0) s FROM invoices GROUP BY status`).all();
+  // الملخص بنطاق المستخدم نفسه — الشريك لا يرى مجاميع غيره
+  const scopeIds = req.user.scopes.licensee.length ? req.user.scopes.licensee : [0];
+  out.summary = all
+    ? db.prepare('SELECT status, COUNT(*) n, COALESCE(SUM(amount),0) s FROM invoices GROUP BY status').all()
+    : db.prepare(`SELECT status, COUNT(*) n, COALESCE(SUM(amount),0) s FROM invoices WHERE subject_kind='licensee'
+        AND subject_id IN (${scopeIds.map(() => '?').join(',')}) GROUP BY status`).all(...scopeIds);
   res.json(out);
 });
 

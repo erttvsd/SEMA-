@@ -113,6 +113,14 @@ r.post('/applications', requireAuth, can('app.create'), (req, res) => {
   if (ban) return res.status(422).json({ error: `لا يجوز إعادة التقديم قبل ${ban.d} (المادة 31/3)` });
   if (subject_kind === 'licensee' && subj.excluded)
     return res.status(422).json({ error: `الجهة مدرجة على قائمة الاستبعاد — ${subj.exclusion_reason || 'المادة 10'}` });
+  // طلب الترخيص أو الاعتماد الأول لملف غير قائم فقط — والمعلَّق أو المسحوب لا يلتف على جزائه بطلب جديد
+  if (['license', 'accreditation'].includes(app_type) && !['draft', 'rejected', 'expired'].includes(subj.status))
+    return res.status(422).json({ error: `لا يُقدَّم طلب جديد والملف في حالة «${subj.status}» — ${
+      subj.status === 'active' || subj.status === 'accredited' ? 'استعمل طلب التجديد أو رفع المستوى' : 'يُعالَج الجزاء أولاً أو يُتظلَّم منه'}` });
+  if (requested_level != null && requested_level !== '' && !(Number.isInteger(Number(requested_level)) && Number(requested_level) >= 1 && Number(requested_level) <= 5))
+    return res.status(400).json({ error: 'المستوى بين 1 و5' });
+  if (subject_kind === 'licensee' && Number(requested_level) === 5 && subj.scope_type !== 'product_line')
+    return res.status(422).json({ error: 'المستوى الخامس لخط إنتاج بمركز تكلفة مستقل (المادة 7)' });
   if (app_type === 'license_renewal') {
     if (!['active', 'expired'].includes(subj.status)) return res.status(422).json({ error: 'التجديد لترخيص ساري أو منتهٍ فقط' });
     // المادة 18/2: يُقدَّم طلب التجديد مع إقرار الامتثال السنوي
@@ -140,6 +148,8 @@ r.post('/applications/:id/screen', requireAuth, can('app.screen'), (req, res) =>
   if (!a) return res.status(404).json({ error: 'غير موجود' });
   if (!['submitted', 'completing'].includes(a.status))
     return res.status(409).json({ error: `لا يصح فحص الاستيفاء والطلب في حالة «${a.status}»` });
+  if (S.hasConflict(req.user.id, a.subject_id))
+    return res.status(422).json({ error: 'تعارض مصالح معلن — يُحظر على المقيّم تقييم هذه الجهة (المادة 20/4)' });
   const today = new Date().toISOString().slice(0, 10);
   if (complete) {
     db.prepare(`UPDATE applications SET stage=4, status='assessment', completeness_done_at=date('now'),
@@ -147,7 +157,7 @@ r.post('/applications/:id/screen', requireAuth, can('app.screen'), (req, res) =>
     S.closeStage(id, 2, req.user.id, 'مستوفى شكلياً');
     S.closeStage(id, 3, req.user.id, a.status === 'completing' ? 'استُكملت النواقص' : 'لا نواقص');
   } else {
-    if (!deficiencies || deficiencies.trim().length < 5)
+    if (!deficiencies || String(deficiencies).trim().length < 5)
       return res.status(422).json({ error: 'بيان النواقص مطلوب ليُخطَر به الطالب' });
     db.prepare(`UPDATE applications SET stage=3, status='deficiencies', deficiencies=?,
       completeness_done_at=date('now') WHERE id=?`).run(deficiencies, id);
@@ -190,11 +200,13 @@ r.post('/applications/:id/facts-report', requireAuth, can('app.facts_report'), (
   const { facts_summary, findings = [], recommendation } = req.body;
   if (recommendation)
     return res.status(422).json({ error: 'يجب أن يقتصر تقرير الوحدة على الوقائع والأدلة دون توصية بالمنح أو الرفض (المادة 20/3)' });
-  if (!facts_summary || facts_summary.trim().length < 10) return res.status(400).json({ error: 'ملخص الوقائع مطلوب' });
+  if (!facts_summary || String(facts_summary).trim().length < 10) return res.status(400).json({ error: 'ملخص الوقائع مطلوب' });
   const a = db.prepare('SELECT * FROM applications WHERE id=?').get(id);
   if (!a) return res.status(404).json({ error: 'غير موجود' });
   if (!['assessment', 'field_visit'].includes(a.status))
     return res.status(409).json({ error: 'تقرير الوقائع يُرفع بعد اكتمال الفحص الشكلي وقبل القرار' });
+  if (S.hasConflict(req.user.id, a.subject_id))
+    return res.status(422).json({ error: 'تعارض مصالح معلن — يُحظر على المقيّم تقييم هذه الجهة (المادة 20/4)' });
   const auditId = db.prepare(`INSERT INTO audits (reference, subject_kind, subject_id, fiscal_year, audit_type, trigger,
       executed_date, assessor_id, status, facts_summary) VALUES (?,?,?,?,'desk','renewal',date('now'),?,'facts_reported',?)`)
     .run(S.nextRef('AUD', 'audits'), a.subject_kind, a.subject_id, new Date().getFullYear(), req.user.id, facts_summary).lastInsertRowid;
@@ -214,16 +226,41 @@ r.post('/applications/:id/decide', requireAuth, can('app.decide'), (req, res) =>
   const { decision, reason } = req.body;
   if (!['grant', 'reject', 'grant_lower_level'].includes(decision))
     return res.status(400).json({ error: 'decision غير صالح' });
-  if (!reason || reason.trim().length < 10)
+  if (!reason || String(reason).trim().length < 10)
     return res.status(422).json({ error: 'تصدر القرارات مسبَّبة وكتابية (المادة 21/3) — التسبيب مطلوب' });
   const a = db.prepare('SELECT * FROM applications WHERE id=?').get(id);
   if (!a) return res.status(404).json({ error: 'غير موجود' });
   if (!a.facts_report_id)
     return res.status(422).json({ error: 'لا يصح القرار قبل تقرير وقائع من وحدة التقييم' });
   if (a.status !== 'decision_pending') return res.status(409).json({ error: 'صدر قرار في هذا الطلب مسبقاً' });
-  let granted = Number(req.body.granted_level) || a.requested_level || null;
-  if (decision === 'grant_lower_level' && a.requested_level && !(granted < a.requested_level))
-    return res.status(422).json({ error: 'المنح بمستوى أدنى يقتضي مستوى دون المطلوب' });
+  // المنح بالمستوى المطلوب نفسه؛ والمنح بمستوى أدنى بين الحالي والمطلوب — لا يُمنح أعلى مما طُلب
+  let granted = a.requested_level || null;
+  if (decision === 'grant_lower_level') {
+    const g = Number(req.body.granted_level);
+    const cur = a.app_type === 'level_upgrade' ? db.prepare('SELECT level FROM licensees WHERE id=?').get(a.subject_id).level : 0;
+    if (!a.requested_level || !Number.isInteger(g) || !(g >= 1 && g < a.requested_level && g > cur))
+      return res.status(422).json({ error: 'المنح بمستوى أدنى يقتضي مستوى دون المطلوب' + (cur ? ` وفوق الحالي (${cur})` : '') });
+    granted = g;
+  }
+  if (decision !== 'reject' && S.hasConflict(req.user.id, a.subject_id))
+    return res.status(422).json({ error: 'تعارض مصالح معلن مع هذه الجهة — يتنحّى العضو عن القرار (المادة 27)' });
+  // لا منح لجهة لا تستوفي الشروط الجوهرية مهما كان التسبيب
+  if (decision !== 'reject') {
+    if (a.subject_kind === 'licensee') {
+      const l = db.prepare('SELECT excluded, exclusion_reason, scope_type FROM licensees WHERE id=?').get(a.subject_id);
+      if (l.excluded) return res.status(422).json({ error: `الجهة مدرجة على قائمة الاستبعاد (المادة 10) — ${l.exclusion_reason || ''}` });
+      if (granted === 5 && l.scope_type !== 'product_line') return res.status(422).json({ error: 'المستوى الخامس لخط إنتاج بمركز تكلفة مستقل (المادة 7)' });
+    }
+    if (a.subject_kind === 'association') {
+      const o = db.prepare('SELECT admin_expense_ratio FROM associations WHERE id=?').get(a.subject_id);
+      if (o.admin_expense_ratio > 0.25)
+        return res.status(422).json({ error: `النسبة الإدارية ${(o.admin_expense_ratio * 100).toFixed(1)}% تتجاوز سقف 25% — لا يُمنح الاعتماد (المادة 15)` });
+      const cyc = db.prepare('SELECT MAX(cycle_year) y FROM criteria_assessments WHERE association_id=?').get(a.subject_id).y;
+      const assessed = cyc ? db.prepare('SELECT COUNT(*) n, SUM(result=\'not_met\') bad FROM criteria_assessments WHERE association_id=? AND cycle_year=?').get(a.subject_id, cyc) : { n: 0, bad: 0 };
+      if (assessed.n < 15) return res.status(422).json({ error: `لم تُقيَّم المعايير الخمسة عشر كاملةً (قُيِّم ${assessed.n}) — تُستوفى مجتمعةً (المادة 13)` });
+      if (assessed.bad) return res.status(422).json({ error: `${assessed.bad} معيار غير مستوفى — المعايير تُستوفى مجتمعةً (المادة 13)` });
+    }
+  }
 
   const year = new Date().getFullYear();
   const today = new Date().toISOString().slice(0, 10);
@@ -577,7 +614,10 @@ r.post('/contributions/:id/preapprove', requireAuth, can('program.preapprove'), 
   const c = db.prepare('SELECT * FROM contributions WHERE id=?').get(Number(req.params.id));
   if (!c) return res.status(404).json({ error: 'غير موجود' });
   if (c.channel !== 'direct_program') return res.status(422).json({ error: 'الموافقة المسبقة للبرامج التنموية الذاتية فقط' });
-  const approve = req.body.approve !== false;
+  // «مسبقة»: قبل التحقق وقبل أي رفض — ولا تُلغي قرار الوحدة
+  if (c.status !== 'declared' || c.program_preapproved) return res.status(409).json({ error: 'البتّ المسبق للبرامج المعلنة التي لم يُبتّ فيها فقط' });
+  // الموافقة هي الأصل عند الإغفال؛ والرفض لا يكون إلا صريحاً (false أو 0) مع سببه
+  const approve = req.body.approve === undefined ? true : [true, 'true', 1, '1'].includes(req.body.approve);
   if (!approve && !req.body.reason) return res.status(422).json({ error: 'سبب الرفض مطلوب' });
   db.prepare(`UPDATE contributions SET program_preapproved=?, reject_reason=?,
       status=CASE WHEN ?=1 THEN 'documented' ELSE 'rejected' END WHERE id=?`)
@@ -656,6 +696,10 @@ r.post('/declarations/:id/submit', requireAuth, can('commitment.declare'), (req,
   if (!d) return res.status(404).json({ error: 'غير موجود' });
   if (!ownsLicensee(req.user, d.licensee_id)) return res.status(403).json({ error: 'إقرارك فقط' });
   if (d.submitted_at) return res.status(409).json({ error: 'قُدِّم هذا الإقرار مسبقاً' });
+  if (db.prepare('SELECT status FROM licensees WHERE id=?').get(d.licensee_id).status === 'withdrawn')
+    return res.status(422).json({ error: 'الترخيص مسحوب — لا يُقدَّم إقرار عليه' });
+  if (req.body.basis_doc_id && !db.prepare("SELECT 1 FROM documents WHERE id=? AND owner_kind='licensee' AND owner_id=?").get(req.body.basis_doc_id, d.licensee_id))
+    return res.status(422).json({ error: 'مستند الإثبات يجب أن يكون من إثبات ملفك' });
   const { basis_type, basis_doc_id, declared_revenue, declared_net_profit, declared_total } = req.body;
   if (!['tax_return', 'audited_statements', 'bank_statement_accountant'].includes(basis_type))
     return res.status(400).json({ error: 'basis_type غير صالح — المادة 23/2(أ)' });
@@ -766,6 +810,12 @@ r.get('/designs', requireAuth, (req, res) => {
 r.post('/designs', requireAuth, can('design.submit'), (req, res) => {
   const { licensee_id, material_type, title, logo_variant, shows_license_no, claim_text, file_doc_id } = req.body;
   if (!ownsLicensee(req.user, licensee_id)) return res.status(403).json({ error: 'لا تملك هذا الملف' });
+  if (!title || !['packaging','ad','website','social','signage','vehicle','other'].includes(material_type))
+    return res.status(400).json({ error: 'العنوان ونوع المادة مطلوبان' });
+  const lstat = db.prepare('SELECT status FROM licensees WHERE id=?').get(licensee_id)?.status;
+  if (lstat !== 'active') return res.status(422).json({ error: 'الموافقة على التصاميم لترخيص ساري فقط — التعليق يوقف كل استعمال جديد (المادة 30/1)' });
+  if (file_doc_id && !db.prepare("SELECT 1 FROM documents WHERE id=? AND owner_kind='licensee' AND owner_id=?").get(file_doc_id, licensee_id))
+    return res.status(422).json({ error: 'ملف التصميم يجب أن يكون من إثبات ملفك' });
   const l = db.prepare('SELECT * FROM licensees WHERE id=?').get(licensee_id);
   const screen = R.screenClaim(claim_text, l.level, l.license_no);
   const today = new Date().toISOString().slice(0, 10);
@@ -788,6 +838,11 @@ r.post('/designs/:id/decide', requireAuth, can('design.decide'), (req, res) => {
     return res.status(400).json({ error: 'decision غير صالح' });
   const d = db.prepare('SELECT * FROM design_approvals WHERE id=?').get(Number(req.params.id));
   if (!d) return res.status(404).json({ error: 'غير موجود' });
+  if (d.status !== 'pending') return res.status(409).json({ error: 'صدر قرار في هذا التصميم مسبقاً' });
+  if (d.due_at < new Date().toISOString().slice(0, 10))
+    return res.status(409).json({ error: `انقضت عشرة أيام عمل في ${d.due_at} — صار التصميم موافقاً عليه ضمنياً (المادة 19/2)` });
+  if (decision !== 'approved' && (!notes || String(notes).trim().length < 10))
+    return res.status(422).json({ error: 'ملاحظات القرار مطلوبة عند الرفض أو طلب التعديل' });
   db.prepare(`UPDATE design_approvals SET decision=?, decision_notes=?, decided_by=?, decided_at=datetime('now'),
               status='decided' WHERE id=?`).run(decision, notes || null, req.user.id, d.id);
   log(req, 'design.decide', 'design', d.id, `${decision}: ${notes || ''}`);

@@ -6,7 +6,9 @@ const { login, attachUser, requireAuth, can, log } = require('./auth');
 const { runJobs, startScheduler, JOBS } = require('./jobs');
 
 const app = express();
-app.set('trust proxy', true);
+// لا يُوثَق بترويسة X-Forwarded-For إلا خلف وكيل عكسي مُعلَن — وإلا تجاوز العميل حدود المحاولات بتغييرها
+app.set('trust proxy', process.env.SEMA_TRUST_PROXY ? (/^\d+$/.test(process.env.SEMA_TRUST_PROXY)
+  ? Number(process.env.SEMA_TRUST_PROXY) : process.env.SEMA_TRUST_PROXY) : false);
 app.disable('x-powered-by');
 
 // ---------- ترويسات الأمان ----------
@@ -26,6 +28,7 @@ app.use((req, res, next) => {
 });
 app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
+app.use((req, _res, next) => { if (req.body == null || typeof req.body !== 'object') req.body = {}; next(); });
 app.use(attachUser);
 
 // ---------- الدخول ----------
@@ -81,6 +84,9 @@ app.get(/^\/(?!api).*/, (_req, res) => res.sendFile(path.join(__dirname, '..', '
 app.use((err, _req, res, _next) => {
   if (err && err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'حجم الملف يتجاوز 20 ميجابايت' });
   if (err && err.type === 'entity.parse.failed') return res.status(400).json({ error: 'صيغة الطلب غير صالحة' });
+  // مخالفة قيود قاعدة البيانات (قيمة خارج المسموح، مرجع غير موجود، حقل إلزامي) خطأ في المدخلات لا في الخادم
+  if (err && /^SQLITE_CONSTRAINT/.test(err.code || '')) return res.status(400).json({ error: 'بيانات غير صالحة أو مرجع غير موجود', code: err.code });
+  if (err instanceof TypeError || err instanceof RangeError) { console.error(err); return res.status(400).json({ error: 'مدخلات غير صالحة' }); }
   console.error(err);
   res.status(err.status || 500).json({ error: 'خطأ في الخادم' });
 });

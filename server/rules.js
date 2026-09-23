@@ -140,7 +140,8 @@ function deficitAssessment(due, paid) {
   // تسامح تدوير العملة فقط — دينار واحد — ولا تسامح في أي نسبة
   if (deficit <= 1) return { deficit: 0, deficit_pct: 0, status: 'fulfilled', violation: null, measure: null,
     message: 'الالتزام مستوفى' };
-  if (p < 0.20) return { deficit: round2(deficit), deficit_pct: round4(p), status: 'deficient', violation: 3,
+  // «أقل من 20%» إمهال و«يتجاوز 20%» تعليق — والعجز المساوي لـ20% تماماً لا يتجاوزها فيُعامَل بالأخف
+  if (p <= 0.20) return { deficit: round2(deficit), deficit_pct: round4(p), status: 'deficient', violation: 3,
     measure: 'grace_period', message: 'عجز أقل من 20%: إمهال 60 يوماً لاستكمال الفارق + خفض المستوى المعلن (المادة 29/3)' };
   return { deficit: round2(deficit), deficit_pct: round4(p), status: 'breach', violation: 4,
     measure: 'suspension', message: 'عجز يتجاوز 20%: تعليق لمدة أقصاها ستة أشهر + نشر الحالة في السجل (المادة 29/4)' };

@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 /* ===== التقارير · المؤشرات · المالية · المعايير · الصلاحيات · المستخدمون · التتبع ===== */
-const { S, api, E, num, money, pct, dt, yr, today, L, lb, tag, toast, modal, route, go, has, kfmt } = window.SEMA;
+const { S, api, E, A, num, money, pct, dt, yr, today, L, lb, tag, toast, modal, route, go, has, kfmt } = window.SEMA;
 const { shell, dataTable, bars, meter, spark, stat, alertBox, legal, card, kv, tabs, docLink, sodName } = window.UI;
 const guard = () => { if (!S.user) { location.hash = '#/login'; return false; } return true; };
 const mount = (fn) => setTimeout(fn, 0);
@@ -107,7 +107,7 @@ route('kpis', async () => {
         <td style="min-width:90px">${spark(k.targets.map((x) => x || 0))}</td>
         <td class="muted" style="white-space:normal;max-width:240px">${E(k.method_ar || '')}</td>
         <td class="muted" style="white-space:normal;max-width:240px">${E(k.benchmark_ar || '')}</td>
-        ${has('kpi.manage') ? `<td><button class="btn sm" onclick="APP.editKpi('${E(k.code)}','${E(k.name_ar)}',${a1 == null ? 'null' : a1})">تحديث</button></td>` : ''}
+        ${has('kpi.manage') ? `<td><button class="btn sm" onclick="APP.editKpi(${A(k.code)},${A(k.name_ar)},${A(a1)})">تحديث</button></td>` : ''}
         </tr>`; }).join('')}
     </tbody></table></div>`, { title: 'المؤشرات والمستهدفات', sub: 'مستهدفات خمس سنوات مقابل الفعلي المسجَّل' });
 });
@@ -287,7 +287,7 @@ route('rbac', async () => {
         <td><span class="tag">${E({ governance:'حوكمة', executive:'تنفيذي', external:'خارجي' }[r.category])}</span></td>
         <td>${r.sod_function ? `<span class="tag gold">${E(sodName(r.sod_function))}</span>` : '<span class="muted">—</span>'}</td>
         <td class="muted">${E({ global:'عام', licensee:'ملف مرخَّص له', association:'ملف منظمة' }[r.scope_kind])}</td>
-        <td class="num"><button class="btn link" onclick="APP.showRolePerms('${E(r.code)}')">${num(r.permission_count)}</button></td>
+        <td class="num"><button class="btn link" onclick="APP.showRolePerms(${A(r.code)})">${num(r.permission_count)}</button></td>
         <td style="white-space:normal;max-width:520px" class="muted">${E(r.description)}</td></tr>`).join('')}
       </tbody></table></div></div>`],
     ['matrix', 'مصفوفة الصلاحيات', M ? M.rows.length : 0, () => !M ? '<div class="empty"><b>غير متاحة</b></div>'
@@ -344,7 +344,7 @@ route('users', async () => {
       { t: 'الصلاحيات', cls: 'num', r: (r) => num(r.permission_count) },
       { t: 'آخر دخول', srt: 'last_login_at', r: (r) => dt(r.last_login_at) },
       { t: 'الحالة', r: (r) => tag(r.status === 'active' ? 'active' : r.status === 'suspended' ? 'suspended' : 'rejected') },
-      { t: '', r: (r) => `<button class="btn sm" onclick="event.stopPropagation();APP.editRoles(${r.id},'${E(r.full_name)}')">الأدوار</button>` },
+      { t: '', r: (r) => `<button class="btn sm" onclick="event.stopPropagation();APP.editRoles(${A(r.id)},${A(r.full_name)})">الأدوار</button>` },
     ],
   }));
   return html;
@@ -371,13 +371,14 @@ route('audit-log', async () => {
       { t: 'الكيان', r: (r) => r.entity_kind ? `${E(r.entity_kind)}${r.entity_id ? ' #' + num(r.entity_id) : ''}` : '—' },
       { t: 'الملخص', r: (r) => `<div style="white-space:normal;max-width:520px">${E(r.summary || '')}</div>` },
       { t: '', r: (r) => (r.before_json || r.after_json)
-        ? `<button class="btn sm" onclick='APP.showDiff(${JSON.stringify(JSON.stringify({ b: r.before_json, a: r.after_json }))})'>التغيير</button>` : '' },
+        ? `<button class="btn sm" onclick="APP.showDiff(${A(JSON.stringify({ b: r.before_json, a: r.after_json }))})">التغيير</button>` : '' },
     ],
   }));
   return html;
 });
 
 // ================= الإعدادات =================
+const LOCKED = ['annual_fee_cap', 'single_org_cap', 'absorption_multiple', 'overhead_cap', 'unannounced_min', 'volunteer_hour_rate', 'decision_matrix'];
 route('settings', async () => {
   if (!guard()) return '';
   const d = await api('/settings');
@@ -385,7 +386,8 @@ route('settings', async () => {
     <thead><tr><th>المفتاح</th><th>القيمة</th><th>الوصف</th>${has('admin.settings') ? '<th></th>' : ''}</tr></thead><tbody>
     ${d.rows.filter((r) => r.k !== 'decision_matrix').map((r) => `<tr><td class="mono">${E(r.k)}</td>
       <td><b>${E(r.v)}</b></td><td class="muted" style="white-space:normal;max-width:520px">${E(r.note || '')}</td>
-      ${has('admin.settings') ? `<td><button class="btn sm" onclick="APP.editSetting('${E(r.k)}','${E(r.v)}')">تحديث</button></td>` : ''}</tr>`).join('')}
+      ${has('admin.settings') ? `<td>${LOCKED.includes(r.k) ? '<span class="tag">تحكمه اللائحة</span>'
+        : `<button class="btn sm" onclick="APP.editSetting(${A(r.k)},${A(r.v)})">تحديث</button>`}</td>` : ''}</tr>`).join('')}
     </tbody></table></div>
     ${legal('تغيير الإعدادات المرتبطة بالمعايير أو الرسوم أو الأرضيات لا يُعتدّ به نظاماً إلا بقرار من مجلس الأمناء وبعد نشره قبل بدء السنة المالية التالية بستين يوماً (المادة 5 و34/7).')}`),
     { title: 'الإعدادات', sub: 'القيم الحاكمة للنظام ومصدرها النظامي' });

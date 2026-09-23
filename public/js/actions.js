@@ -439,15 +439,19 @@ function decideAppeal(id) {
       ${F.sel('decision', 'القرار', [['upheld', 'تأييد القرار المتظلَّم منه'],
         ['overturned', 'إلغاء القرار'], ['partially_upheld', 'قبول التظلم جزئياً'],
         ['inadmissible', 'عدم قبول التظلم شكلاً']], 'upheld', true)}
-      ${F.sel('stay_of_execution', 'وقف التنفيذ', [['', 'لا'], ['1', 'نعم — بقرار مسبَّب']])}
-      ${F.area('stay_reason', 'تسبيب وقف التنفيذ', '', 2)}
       ${F.area('reason', 'التسبيب الكتابي (إلزامي)', '', 6, true)}
     </form>`,
     actions: [{ label: 'إصدار القرار', cls: 'primary', run: async (el, close) => {
       const b = readForm(el.querySelector('#af'));
-      b.stay_of_execution = b.stay_of_execution === '1';
       await post(`/appeals/${id}/decide`, b, 'صدر قرار اللجنة — نهائي في النطاق الداخلي للعلامة');
       close(); render(); } }] });
+}
+function stayAppeal(id) {
+  modal({ title: 'وقف تنفيذ الجزاء أثناء نظر التظلم', body: `
+    ${legal('المادة (22/4): لا يوقف التظلم تنفيذ قرار التعليق أو السحب إلا بقرار مسبَّب من اللجنة نفسها. ووقف التنفيذ يوقف التصعيد الآلي من التعليق إلى السحب حتى الفصل في التظلم.')}
+    <form id="sf" class="form-grid">${F.area('reason', 'تسبيب وقف التنفيذ', '', 4, true)}</form>`,
+    actions: [{ label: 'وقف التنفيذ', cls: 'primary', run: async (el, close) => {
+      await post(`/appeals/${id}/stay`, readForm(el.querySelector('#sf')), 'قُرّر وقف التنفيذ'); close(); render(); } }] });
 }
 
 // ---------- الشكاوى ----------
@@ -592,19 +596,20 @@ async function editLicensee(id) {
   modal({ title: 'تحديث بيانات ' + d.legal_name, wide: true, body: `<form id="ef" class="form-grid">
     ${all ? F.txt('legal_name', 'الاسم القانوني', d.legal_name, true) : ''}
     ${F.txt('trade_name', 'الاسم التجاري', d.trade_name || '')}
-    ${F.sel('sector', 'القطاع', (S.ref?.sectors || []).map((s) => [s, s]), d.sector)}
+    ${all ? F.sel('sector', 'القطاع', (S.ref?.sectors || []).map((s) => [s, s]), d.sector) : ''}
     ${F.txt('city', 'المدينة', d.city || '')}
     ${F.txt('address', 'العنوان', d.address || '')}
     ${F.txt('contact_name', 'جهة الاتصال', d.contact_name || '')}
     ${F.txt('contact_email', 'البريد', d.contact_email || '')}
     ${F.txt('contact_phone', 'الهاتف', d.contact_phone || '')}
-    ${F.numf('annual_revenue', 'الإيراد السنوي', d.annual_revenue || '')}
-    ${F.numf('net_profit', 'صافي الربح قبل الضريبة', d.net_profit || '')}
-    ${F.numf('fiscal_year', 'السنة المالية المرجعية', d.fiscal_year || '')}
-    ${F.txt('scope_desc', 'وصف نطاق الترخيص', d.scope_desc || '')}
+    ${all ? F.numf('annual_revenue', 'الإيراد السنوي', d.annual_revenue || '') : ''}
+    ${all ? F.numf('net_profit', 'صافي الربح قبل الضريبة', d.net_profit || '', false, 'any') : ''}
+    ${all ? F.numf('fiscal_year', 'السنة المالية المرجعية', d.fiscal_year || '') : ''}
+    ${all ? F.txt('scope_desc', 'وصف نطاق الترخيص', d.scope_desc || '') : ''}
     ${all ? F.txt('commercial_reg', 'السجل التجاري', d.commercial_reg || '') : ''}
     ${all ? F.txt('tax_file_no', 'الملف الضريبي', d.tax_file_no || '') : ''}
-  </form>${legal('تغيير الإيراد يعيد احتساب الشريحة والأرضية آلياً (المادة 5). ولا يجوز رفع المستوى المعلن خلال السنة إلا بطلب جديد وموافقة لجنة منح الترخيص وسداد فرق الرسم (المادة 8/3).')}`,
+  </form>${legal(all ? 'تغيير الإيراد يعيد احتساب الشريحة والأرضية آلياً (المادة 5) — ويُعدَّل بعد مطابقته مع الإثبات المالي.'
+    : 'تعدّل هنا بيانات التواصل. أما الإيراد وصافي الربح والقطاع والنطاق فتحدد الشريحة والرسم والالتزام، فتُحدَّث عبر إقرار الامتثال السنوي بإثباته المالي وتعتمدها الأمانة (المادة 23).')}`,
     actions: [{ label: 'حفظ', cls: 'primary', run: async (el, close) => {
       const b = readForm(el.querySelector('#ef'));
       ['annual_revenue', 'net_profit', 'fiscal_year'].forEach((k) => { if (b[k]) b[k] = Number(b[k]); });
@@ -622,15 +627,16 @@ async function editOrg(id) {
     ${F.txt('contact_name', 'جهة الاتصال', d.contact_name || '')}
     ${F.txt('contact_email', 'البريد', d.contact_email || '')}
     ${F.txt('contact_phone', 'الهاتف', d.contact_phone || '')}
-    ${F.numf('board_size', 'حجم المجلس (ذوو حق التصويت)', d.board_size || '')}
+    ${all ? `${F.numf('board_size', 'حجم المجلس (ذوو حق التصويت)', d.board_size || '')}
     ${F.numf('paid_board_members', 'الأعضاء المأجورون', d.paid_board_members || 0)}
     ${F.numf('board_meetings_last_year', 'اجتماعات المجلس السنة الماضية', d.board_meetings_last_year || '')}
     ${F.numf('annual_revenue', 'الإيراد السنوي', d.annual_revenue || '')}
     ${F.numf('total_expenses', 'إجمالي المصروفات', d.total_expenses || '')}
     ${F.numf('admin_expenses', 'المصروفات الإدارية والتسييرية والدعائية', d.admin_expenses || '')}
     ${F.numf('fundraising_cost_ratio', 'نسبة كلفة جمع التبرعات', d.fundraising_cost_ratio || '', false, '0.01')}
-    ${F.numf('largest_budget_3y', 'أكبر ميزانية سنوية في ثلاث سنوات', d.largest_budget_3y || '')}
-  </form>${legal('يعيد النظام احتساب النسبة الإدارية وتصنيفها المنشور وسقف الاستيعاب ومستوى المراجعة المطلوب آلياً بعد الحفظ (المواد 14 و15 والمعيار 10).')}`,
+    ${F.numf('largest_budget_3y', 'أكبر ميزانية سنوية في ثلاث سنوات', d.largest_budget_3y || '')}` : ''}
+  </form>${legal(all ? 'يعيد النظام احتساب النسبة الإدارية وتصنيفها المنشور وسقف الاستيعاب ومستوى المراجعة المطلوب آلياً بعد الحفظ (المواد 14 و15 والمعيار 10).'
+    : 'تعدّل هنا بيانات التواصل. أما أرقام الحوكمة والمالية فيُحسب منها التصنيف المنشور وسقف الاستيعاب، فتحدّثها الأمانة بعد مطابقتها مع القوائم المالية المدققة المحمَّلة في «إثباتاتي».')}`,
     actions: [{ label: 'حفظ', cls: 'primary', run: async (el, close) => {
       const b = readForm(el.querySelector('#ef'));
       ['board_size', 'paid_board_members', 'board_meetings_last_year', 'annual_revenue',
@@ -706,7 +712,7 @@ function showDiff(json) {
       overflow:auto;max-height:420px;font-size:.74rem">${E(pp(d.a))}</pre></div></div>` });
 }
 
-window.APP = { resubmitApp, uploadImpact, preapproveProgram, processDeclaration, decideDeclaration, scheduleAudit,
+window.APP = { stayAppeal, resubmitApp, uploadImpact, preapproveProgram, processDeclaration, decideDeclaration, scheduleAudit,
   newMarketTest, newMeeting, uploadDoc, verifyDoc, newApplication, screenApp, factsReport, decideApp,
   newContribution, confirmReceipt, verifyContribution, submitDeclaration, newDesign, decideDesign,
   auditReport, newSanction, fileAppeal, fileAppealApp, decideAppeal, triageComplaint,

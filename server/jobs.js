@@ -22,8 +22,10 @@ const JOBS = {
     title: 'تحويل التعليق إلى سحب بعد ستة أشهر',
     article: 'المادة 30/2',
     run() {
-      const rows = db.prepare(`SELECT * FROM sanctions WHERE measure='suspension' AND status='active'
-          AND auto_escalate_to='withdrawal' AND effective_to < date('now')`).all();
+      // التظلم لا يوقف التصعيد إلا إذا قررت لجنة التظلمات وقف التنفيذ صراحةً (المادة 22/4)
+      const rows = db.prepare(`SELECT * FROM sanctions s WHERE measure='suspension' AND status IN ('active','appealed')
+          AND auto_escalate_to='withdrawal' AND effective_to < date('now')
+          AND NOT EXISTS (SELECT 1 FROM appeals a WHERE a.sanction_id=s.id AND a.stay_of_execution=1 AND a.status!='decided')`).all();
       for (const s of rows) {
         const w = S.createSanction(null, { subject_kind: s.subject_kind, subject_id: s.subject_id, subject_name: s.subject_name,
           violation_code: s.violation_code, measure: 'withdrawal',

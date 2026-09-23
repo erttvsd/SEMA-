@@ -27,6 +27,7 @@ r.get('/proposals', requireAuth, can('standards.propose', 'standards.approve', '
     filters: { status: { op: 'in', col: 'p.status' }, kind: { op: 'in', col: 'p.kind' } },
     search: ['p.title', 'p.summary', 'p.reference', 'p.article_ref'],
     allowSort: ['created_at', 'consultation_end', 'status'], defaultSort: 'p.created_at DESC', req,
+    extraWhere: hasPerm(req.user, 'standards.propose') ? [] : ["p.status != 'draft'"],
   });
   res.json(out);
 });
@@ -35,7 +36,7 @@ r.get('/proposals/:id', requireAuth, can('standards.propose', 'standards.approve
   const p = db.prepare(`SELECT p.*, u.full_name proposed_by_name, b.full_name board_decided_by_name
       FROM standards_proposals p LEFT JOIN users u ON u.id=p.proposed_by LEFT JOIN users b ON b.id=p.board_decided_by
       WHERE p.id=?`).get(Number(req.params.id));
-  if (!p) return res.status(404).json({ error: 'غير موجود' });
+  if (!p || (p.status === 'draft' && !hasPerm(req.user, 'standards.propose'))) return res.status(404).json({ error: 'غير موجود' });
   p.comments = db.prepare(`SELECT c.*, u.full_name responded_by_name FROM consultation_comments c
       LEFT JOIN users u ON u.id=c.responded_by WHERE c.proposal_id=? ORDER BY c.submitted_at`).all(p.id);
   p.days_left = p.status === 'consultation' ? Math.max(0, R.daysBetween(today(), p.consultation_end)) : null;
@@ -46,9 +47,11 @@ r.post('/proposals', requireAuth, can('standards.propose'), (req, res) => {
   const { title, summary, body, article_ref, kind = 'standard', is_material = true } = req.body;
   if (!title || !summary || !body) return res.status(400).json({ error: 'العنوان والملخص والنص مطلوبة' });
   if (!KINDS.includes(kind)) return res.status(400).json({ error: 'نوع المقترح غير صالح' });
+  // تعديل المعيار أو الرسوم أو الأرضيات أو النظام الداخلي جوهري دائماً؛ التفسير وحده قد لا يكون كذلك
+  const material = kind === 'interpretation' ? !!is_material && is_material !== '0' : true;
   const id = db.prepare(`INSERT INTO standards_proposals (reference, title, summary, body, article_ref, kind, is_material, proposed_by)
       VALUES (?,?,?,?,?,?,?,?)`).run(S.nextRef('STD', 'standards_proposals'), title, summary, body, article_ref || null,
-    kind, is_material ? 1 : 0, req.user.id).lastInsertRowid;
+    kind, material ? 1 : 0, req.user.id).lastInsertRowid;
   log(req, 'proposal.create', 'proposal', id, title);
   res.status(201).json(get(id));
 });
@@ -114,7 +117,9 @@ r.post('/proposals/:id/decide', requireAuth, (req, res) => {
   if (!['approved', 'rejected'].includes(decision)) return res.status(400).json({ error: 'قرار غير صالح' });
   if (!reason || reason.trim().length < 10) return res.status(422).json({ error: 'التسبيب مطلوب' });
   if (decision === 'approved') {
-    if (!effective_from) return res.status(422).json({ error: 'تاريخ النفاذ مطلوب' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(effective_from || '')) || Number.isNaN(Date.parse(effective_from)))
+      return res.status(422).json({ error: 'تاريخ النفاذ مطلوب بصيغة YYYY-MM-DD' });
+    if (effective_from < today()) return res.status(422).json({ error: 'تاريخ النفاذ لا يسبق تاريخ القرار' });
     if (['fees', 'floors'].includes(p.kind) && R.daysBetween(today(), effective_from) < 60)
       return res.status(422).json({ error: 'تعديل الرسوم والأرضيات يُنشر قبل بدء السنة المالية التالية بستين يوماً على الأقل (المادة 5)' });
   }

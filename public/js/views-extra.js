@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 /* ===== التسجيل الذاتي · المشاورات · متابعة البلاغ · الشهادة · المقترحات · المهام الآلية · الحساب ===== */
-const { S, api, E, num, money, pct, dt, yr, today, L, lb, tag, toast, modal, route, render, go, has, LOGO } = window.SEMA;
+const { S, api, E, A, num, money, pct, dt, yr, today, L, lb, tag, toast, modal, route, render, go, has, LOGO } = window.SEMA;
 const { shell, dataTable, stat, alertBox, legal, card, kv, tabs } = window.UI;
 const mount = (fn) => setTimeout(fn, 0);
 const pub = (html, active) => window.UI.pubShell(html, active);
@@ -373,7 +373,7 @@ async function proposalDetail(id) {
     if (p.status === 'consultation_closed' || (p.status === 'draft' && !p.is_material)) btn.push(`<button class="btn gold sm" onclick="APPX.submitProposal(${p.id})">رفع للقرار</button>`);
   }
   if (p.status === 'submitted_to_board' && has(p.kind === 'bylaws' ? 'gov.bylaws.amend' : 'standards.approve'))
-    btn.push(`<button class="btn gold sm" onclick="APPX.decideProposal(${p.id},'${p.kind}')">القرار</button>`);
+    btn.push(`<button class="btn gold sm" onclick="APPX.decideProposal(${A(p.id)},${A(p.kind)})">القرار</button>`);
   return shell(`
     <div class="grid g4" style="margin-bottom:14px">
       ${stat('الحالة', E(PSTAT[p.status]), p.is_material ? 'تعديل جوهري' : 'غير جوهري')}
@@ -406,7 +406,7 @@ route('jobs', async () => {
         <td>${j.last ? E(String(j.last.started_at).slice(0, 16)) : '—'}</td>
         <td class="num">${j.last ? (j.last.details ? `<span class="tag danger">${E(j.last.details)}</span>` : num(j.last.affected)) : '—'}</td>
         <td class="muted">${E(j.last?.triggered_by || '—')}</td>
-        ${has('admin.settings') ? `<td><button class="btn sm" onclick="APPX.runJobs('${E(j.key)}')">تشغيل</button></td>` : ''}</tr>`).join('')}
+        ${has('admin.settings') ? `<td><button class="btn sm" onclick="APPX.runJobs(${A(j.key)})">تشغيل</button></td>` : ''}</tr>`).join('')}
       </tbody></table></div>`, { actions: has('admin.settings') ? '<button class="btn primary sm" onclick="APPX.runJobs()">تشغيل الكل الآن</button>' : '' })}
     ${card('سجل التشغيل', `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>الوقت</th><th>المهمة</th><th>المتأثر</th><th>بواسطة</th></tr></thead><tbody>
       ${d.runs.filter((x) => x.affected || x.details).slice(0, 60).map((x) => `<tr><td class="mono">${E(String(x.started_at).slice(0, 16))}</td>
