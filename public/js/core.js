@@ -181,7 +181,12 @@ async function render() {
     if (typeof html === 'string') app.innerHTML = html;
   } catch (e) {
     console.error(e);
-    app.innerHTML = `<div class="main"><div class="alert danger"><b>تعذّر العرض</b>${E(e.message)}</div></div>`;
+    const box = e.status === 403
+      ? `<div class="alert warn"><div><b>لا تملك صلاحية الاطلاع على هذه الصفحة</b>${E(e.message)}
+         <div style="margin-top:6px"><a href="#/dashboard">العودة إلى لوحة العمل</a></div></div></div>`
+      : e.status === 404 ? `<div class="alert warn"><div><b>غير موجود</b>${E(e.message)}</div></div>`
+      : `<div class="alert danger"><div><b>تعذّر العرض</b>${E(e.message)}</div></div>`;
+    app.innerHTML = S.user && window.UI ? window.UI.shell(box, { title: '' }) : `<div class="main">${box}</div>`;
   }
   window.scrollTo(0, 0);
   rendering = false;
