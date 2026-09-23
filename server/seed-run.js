@@ -1,4 +1,5 @@
 'use strict';
+const crypto = require('crypto');
 const { db } = require('./db');
 const REF = require('./reference');
 const R = require('./rules');
@@ -41,9 +42,14 @@ function run() {
     console.log('التصاميم والشكاوى واختبار السوق…');
     seedMisc(licensees, associations, staff);
     console.log('المؤشرات الفعلية…');
+    console.log('المقترحات والمشاورة والحالات المفتوحة للمسارات…');
+    seedExtensions(staff, licensees, associations);
     seedActuals();
   });
   tx();
+  console.log('تشغيل المهام الآلية على البيانات…');
+  const jr = require('./jobs').runJobs('seed');
+  for (const j of jr) if (j.affected) console.log(`  ${j.title}: ${j.affected}`);
   report();
 }
 
@@ -748,6 +754,115 @@ function seedMisc(licensees, associations, staff) {
   }
 }
 
+// ---------- الوحدات المضافة: المشاورة، الحالات المفتوحة، رموز المتابعة ----------
+function seedExtensions(staff, licensees, associations) {
+  const S = require('./services');
+  const t = new Date().toISOString().slice(0, 10);
+  const ago = (d) => R.addDays(t, -d);
+
+  // 1) البرامج الذاتية: الموثَّقة موافَق عليها مسبقاً، وواحد بانتظار موافقة لجنة المعايير
+  db.prepare("UPDATE contributions SET program_preapproved=1 WHERE channel='direct_program' AND status IN ('documented','verified')").run();
+  const lDp = licensees.find((l) => l.status === 'active' && l.level >= 3);
+  db.prepare(`INSERT INTO contributions (reference, licensee_id, association_id, fiscal_year, channel, amount, purpose,
+      transfer_date, notified_secretariat, status) VALUES (?,?,NULL,?, 'direct_program', ?, ?, ?, 1, 'declared')`)
+    .run(nref('CON', 'contributions'), lDp.id, YEAR, 14500, 'برنامج تنموي ذاتي مقترح: تأهيل ورشة تدريب مهني لثلاثين شاباً في حي الأندلس', ago(6));
+
+  // 2) رموز متابعة البلاغات — ورمز ثابت للبلاغ الأول لأغراض العرض
+  for (const c of db.prepare('SELECT id FROM complaints').all())
+    db.prepare('UPDATE complaints SET tracking_code=? WHERE id=?').run(c.id === 1 ? 'SEMA2026' : crypto.randomBytes(4).toString('hex').toUpperCase(), c.id);
+
+  // 3) طلبات في مراحل المسار كلها: نواقص، واستكمال، وتجديد، ورفع مستوى
+  const open = db.prepare("SELECT * FROM applications WHERE status='submitted' AND subject_kind='licensee' ORDER BY id").all();
+  if (open[0]) {
+    db.prepare(`UPDATE applications SET status='deficiencies', stage=3, completeness_done_at=?, deficiencies=? WHERE id=?`)
+      .run(ago(6), 'شهادة عدم المديونية الضريبية منتهية الصلاحية · لم يُرفق بيان الالتزام المجتمعي معتمداً من الإدارة العليا', open[0].id);
+    db.prepare("UPDATE application_stages SET completed_at=?, note='إخطار بالنواقص' WHERE application_id=? AND stage=2").run(ago(6), open[0].id);
+    db.prepare("UPDATE application_stages SET started_at=? WHERE application_id=? AND stage=3").run(ago(6), open[0].id);
+  }
+  if (open[1]) {
+    db.prepare(`UPDATE applications SET status='completing', stage=2, completeness_done_at=?, resubmitted_at=?, deficiencies=? WHERE id=?`)
+      .run(ago(12), ago(2), 'إفادة الضمان الاجتماعي غير محدَّثة', open[1].id);
+  }
+  const orgOpen = db.prepare("SELECT * FROM applications WHERE status='submitted' AND subject_kind='association' ORDER BY id").get();
+  if (orgOpen) db.prepare("UPDATE applications SET status='assessment', stage=4, completeness_done_at=?, assessment_due_at=? WHERE id=?")
+    .run(ago(9), R.addWorkDays(ago(9), 20), orgOpen.id);
+  // ترخيص يقترب انتهاؤه وقد قُدِّم تجديده، وآخر يقترب انتهاؤه بلا تجديد (يولّد تذكيراً)
+  const act = licensees.filter((l) => l.status === 'active');
+  const renew = act[3], expiring = act[4], upgrade = act[5];
+  db.prepare('UPDATE licensees SET start_date=?, end_date=? WHERE id=?').run(ago(340), R.addDays(t, 25), renew.id);
+  db.prepare('UPDATE licensees SET start_date=?, end_date=? WHERE id=?').run(ago(320), R.addDays(t, 45), expiring.id);
+  const ren = S.createApplication({ app_type: 'license_renewal', subject_kind: 'licensee', subject_id: renew.id, applicant_user_id: renew.uid });
+  db.prepare('UPDATE applications SET submitted_at=?, completeness_due_at=?, sla_due_at=? WHERE id=?')
+    .run(ago(8) + ' 10:00:00', R.addWorkDays(ago(8), 10), R.addWorkDays(ago(8), 90), ren.id);
+  if (upgrade.level < 4) {
+    const up = S.createApplication({ app_type: 'level_upgrade', subject_kind: 'licensee', subject_id: upgrade.id,
+      applicant_user_id: upgrade.uid, requested_level: upgrade.level + 1 });
+    const audit = db.prepare(`INSERT INTO audits (reference, subject_kind, subject_id, fiscal_year, audit_type, trigger, executed_date,
+        assessor_id, status, facts_summary) VALUES (?,?,?,?, 'desk','renewal',?,?, 'facts_reported', ?)`).run(nref('AUD', 'audits'),
+      'licensee', upgrade.id, YEAR, ago(3), staff['assessor1@sema.ly'],
+      'راجعت الوحدة القوائم المالية وخطة المساهمات للسنة الجارية؛ الالتزام المقدَّر بالمستوى المطلوب موثَّق بخطة تحويلات لثلاث منظمات معتمدة، ولا مخالفة سابقة على الملف.').lastInsertRowid;
+    db.prepare(`UPDATE applications SET status='decision_pending', stage=7, facts_report_id=?, submitted_at=?, completeness_done_at=?, assessment_done_at=? WHERE id=?`)
+      .run(audit, ago(20) + ' 09:00:00', ago(17), ago(3), up.id);
+    db.prepare("UPDATE application_stages SET started_at=?, completed_at=?, note='منفَّذ' WHERE application_id=? AND stage BETWEEN 2 AND 6").run(ago(18), ago(3), up.id);
+    db.prepare("UPDATE application_stages SET started_at=? WHERE application_id=? AND stage=7").run(ago(3), up.id);
+  }
+
+  // 4) إقرارات في كل مرحلة: بانتظار الوقائع، وبانتظار القرار، ومقضيّ فيها
+  const decl = db.prepare(`SELECT cd.* FROM compliance_declarations cd JOIN licensees l ON l.id=cd.licensee_id
+      WHERE cd.fiscal_year=? AND cd.submitted_at IS NOT NULL AND l.status='active' ORDER BY cd.id`).all(YEAR - 1);
+  decl.forEach((d, i) => {
+    if (i < 3) db.prepare(`UPDATE compliance_declarations SET status='submitted', processed_by=NULL, processed_at=NULL, outcome=NULL,
+        facts_note=NULL, decided_by=NULL, decided_at=NULL WHERE id=?`).run(d.id);
+    else if (i < 5) db.prepare(`UPDATE compliance_declarations SET status='accepted', facts_note=?, outcome=NULL, decided_by=NULL, decided_at=NULL WHERE id=?`)
+      .run('طوبق الإقرار الضريبي مع القوائم المالية المدققة؛ وطوبقت إيصالات التحويل مع إقرارات الاستلام من المنظمات المتلقية. الالتزام موثَّق.', d.id);
+    else db.prepare(`UPDATE compliance_declarations SET facts_note=COALESCE(facts_note,?), decided_by=?, decided_at=COALESCE(decided_at, processed_at) WHERE id=?`)
+      .run('وقائع التدقيق المكتبي مطابقة لما في الإقرار.', staff['licensing1@sema.ly'], d.id);
+  });
+
+  // 5) مقترحات التعديل والمشاورة العامة (المادة 19/3)
+  const P = db.prepare(`INSERT INTO standards_proposals (reference, title, summary, body, article_ref, kind, is_material, proposed_by,
+      status, consultation_start, consultation_end, response_summary, board_decision, board_decision_reason, board_decided_by,
+      board_decided_at, effective_from, created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
+  const C = db.prepare(`INSERT INTO consultation_comments (proposal_id, author_name, author_kind, organization, body, submitted_at,
+      response, responded_by, responded_at) VALUES (?,?,?,?,?,?,?,?,?)`);
+  const st1 = staff['standards1@sema.ly'], st2 = staff['standards2@sema.ly'], chair = staff['chair@sema.ly'];
+  const p1 = P.run('STD-00001', 'تحديد سعر ساعة التطوع الموحَّد للسنة المالية 2026', 'تفسير ملزم لطريقة احتساب وقت تطوع الموظفين ضمن الالتزام.',
+    'تُحتسب ساعة التطوع بثمانية عشر ديناراً ليبياً للسنة المالية 2026، على أن يُعتمد سجل الساعات من المسؤول المباشر ويُطابَق مع كشوف الحضور، ولا يتجاوز مجموع ما يُحتسب من التطوع 10% من إجمالي الالتزام (المادة 20).',
+    'لائحة الاعتماد — المادة 20', 'interpretation', 0, st1, 'approved', null, null, null, 'approved',
+    'تفسير لا يغيّر المعيار ويحقق التوحيد بين المرخَّص لهم؛ يُعتمد ويُنشر في السجل.', chair, R.addDays(`${YEAR}-02-20`, 0), `${YEAR}-03-01`, `${YEAR}-02-10`).lastInsertRowid;
+  void p1;
+  const p2 = P.run('STD-00002', 'تخفيض أرضية المستوى الأول للحرفيين والفنانين في الشريحة (أ)',
+    'خفض أرضية المستوى الأول من 500 إلى 300 دينار للحرفيين والفنانين والمبدعين دون غيرهم.',
+    'أظهرت السنة التجريبية أن أرضية 500 دينار تعادل عند بعض الحرفيين أكثر من 3% من صافي دخلهم، أي ثلاثة أضعاف نسبة المستوى الأول. يُقترح خفض أرضية المستوى الأول في الشريحة (أ) إلى 300 دينار لفئة الحرفيين والفنانين والمبدعين، مع بقاء النسبة 1% والقاعدة «الأعلى من الاثنين» كما هي.',
+    'لائحة الاعتماد — المادة 5', 'floors', 1, st2, 'submitted_to_board', ago(110), ago(80),
+    'وردت أربع مداخلات: ثلاث مؤيدة من اتحاد الحرفيين ومنظمتين معتمدتين، وواحدة تحفّظت على أثر الخفض في إيراد الرسوم. ردّت اللجنة بأن الرسوم لا تتأثر لأنها لا تُحتسب من الالتزام، وأن فئة الحرفيين لا تتجاوز 12% من المرخَّص لهم.',
+    null, null, null, null, null, ago(120)).lastInsertRowid;
+  C.run(p2, 'م. فوزي بن حامد', 'expert', 'اتحاد الحرفيين', 'نؤيد الخفض؛ فأغلب الحرفيين في طرابلس لا يتجاوز صافي دخلهم أربعين ألف دينار، والأرضية الحالية تعادل عندهم 1.25% فأكثر.', ago(105), 'شكراً — المقترح يستهدف هذه الفئة تحديداً دون المنشآت التجارية في الشريحة ذاتها.', st2, ago(90));
+  C.run(p2, 'جمعية نور المعرفة لمحو الأمية', 'association', 'منظمة معتمدة', 'نؤيد، ونقترح ربط الخفض بعدد سنوات الترخيص حتى لا يصبح دائماً.', ago(100), 'اللجنة تراجع كل الأرضيات سنوياً وجوباً (المادة 5)، فلا حاجة لربطه بمدة.', st2, ago(88));
+  C.run(p2, 'أ. منير الشلوي', 'public', null, 'أخشى أن يقلّ إيراد الرسوم فتضعف قدرة الأمانة على التدقيق.', ago(95), 'الرسوم منفصلة عن الالتزام ولا تتأثر بالأرضية (المادة 34/6).', st2, ago(86));
+  C.run(p2, 'مشغل يد الخير للتطريز', 'licensee', 'مرخَّص له', 'نؤيد بقوة — هذا سيشجع حرفيين آخرين على الانضمام.', ago(85), 'شكراً على المداخلة.', st2, ago(84));
+  const p3 = P.run('STD-00003', 'إضافة معيار سادس عشر للاعتماد: حماية بيانات المستفيدين',
+    'اشتراط سياسة مكتوبة لحماية بيانات المستفيدين الشخصية لدى المنظمات المعتمدة.',
+    'يُضاف إلى معايير الاعتماد في المادة (13) معيار سادس عشر: «سياسة مكتوبة لحماية البيانات الشخصية للمستفيدين، تحدد ما يُجمع ولماذا ومن يطلع عليه ومدة الحفظ، مع تعيين مسؤول عنها». ويُمهل المعتمدون حالياً ستة أشهر لاستيفائه.',
+    'لائحة الاعتماد — المادة 13', 'standard', 1, st1, 'consultation', ago(18), R.addDays(t, 12), null, null, null, null, null, null, ago(25)).lastInsertRowid;
+  C.run(p3, 'جمعية الهلال الأحمر الليبي — فرع طرابلس', 'association', 'منظمة معتمدة', 'نؤيد المعيار، ونطلب نموذج سياسة استرشادي تصدره الأمانة حتى لا تتفاوت المنظمات الصغيرة في فهمه.', ago(15), 'ستصدر اللجنة نموذجاً استرشادياً مع اعتماد المعيار.', st1, ago(10));
+  C.run(p3, 'د. هالة الدرناوي', 'expert', 'جامعة بنغازي', 'مهلة ستة أشهر كافية للمنظمات الكبيرة لكنها قصيرة للصغيرة؛ أقترح تسعة أشهر للمنظمات دون 250 ألف دينار.', ago(9), null, null, null);
+  C.run(p3, 'أ. سالمة بن طاهر', 'association', 'شبكة المنظمات الأهلية الليبية', 'ينبغي أن يشمل المعيار حذف البيانات بعد انتهاء البرنامج بمدة محددة.', ago(4), null, null, null);
+  const p4 = P.run('STD-00004', 'إلزام المستوى الثالث فأعلى بإرفاق تقرير أثر ربع سنوي',
+    'رفع وتيرة تقارير الأثر للمساهمات الكبيرة من سنوية إلى ربع سنوية.',
+    'يُقترح أن تقدّم المنظمات المتلقية تقرير أثر ربع سنوي عن كل مساهمة تتجاوز خمسين ألف دينار من مرخَّص له في المستوى الثالث فأعلى، بدلاً من التقرير الواحد في المادة (23/3).',
+    'لائحة الاعتماد — المادة 23', 'standard', 1, st1, 'consultation', ago(44), ago(14), null, null, null, null, null, null, ago(50)).lastInsertRowid;
+  C.run(p4, 'مؤسسة نماء للتنمية المجتمعية', 'association', 'منظمة معتمدة', 'العبء الإداري كبير؛ نقترح نصف سنوي بدل ربع سنوي حتى لا ترتفع النسبة الإدارية.', ago(30), 'وجيه — ستعدّل اللجنة الوتيرة إلى نصف سنوية في الصيغة المرفوعة.', st1, ago(20));
+  C.run(p4, 'شركة الواحة للصناعات الغذائية', 'licensee', 'مرخَّص له', 'نؤيد؛ التقارير الأكثر تواتراً تفيدنا في الاتصال مع المستهلكين.', ago(26), 'شكراً على المداخلة.', st1, ago(20));
+  P.run('STD-00005', 'تعديل النظام الداخلي: رفع سقف المراقبين إلى سبعة في الدورة',
+    'رفع سقف المراقبين المقبولين من خمسة إلى سبعة مع بقاء سقف القطاع مراقبَين.',
+    'يُعدَّل البند (3) من المادة (34) ليصبح: «لا يجوز أن يزيد عدد المراقبين المقبولين في الدورة الواحدة على سبعة، ولا أن يمثّل قطاعٌ واحدٌ أكثر من مراقبَين». ويُعرض على الجمعية العمومية بأغلبية الثلثين (المادة 35).',
+    'النظام الداخلي — المادة 34', 'bylaws', 1, st1, 'draft', null, null, null, null, null, null, null, null, ago(3));
+
+  // 6) مستندات منشورة للعموم: شهادة السجل والنظام الأساسي والتقارير متاحة بلا دخول (المعيار 14)
+  db.prepare("UPDATE documents SET is_public=1 WHERE doc_type IN ('bylaws','annual_report','financials_3y','salary_disclosure','impact_report') AND confidential=0").run();
+}
+
 // ---------- المؤشرات الفعلية للسنة الأولى ----------
 function seedActuals() {
   const set = (code, y, v) => db.prepare(`INSERT INTO kpi_values (kpi_code,year_no,kind,value) VALUES (?,?,'actual',?)
@@ -806,6 +921,9 @@ function report() {
     ['الفواتير', 'SELECT COUNT(*) n FROM invoices'],
     ['جولات اختبار السوق', 'SELECT COUNT(*) n FROM market_tests'],
     ['قيم المؤشرات', 'SELECT COUNT(*) n FROM kpi_values'],
+    ['مقترحات التعديل', 'SELECT COUNT(*) n FROM standards_proposals'],
+    ['مداخلات المشاورة', 'SELECT COUNT(*) n FROM consultation_comments'],
+    ['تشغيلات المهام الآلية', 'SELECT COUNT(*) n FROM job_runs'],
   ];
   for (const [label, q] of rows) console.log(String(label).padEnd(30, '.') + ' ' + t(q));
   const money = db.prepare('SELECT COALESCE(SUM(commitment_due),0) d, COALESCE(SUM(total_paid),0) p FROM commitments').get();

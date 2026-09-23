@@ -101,8 +101,10 @@ route('contributions', async () => {
           r.impact_doc_id ? '<span class="tag ok">تقرير أثر</span>' : '',
         ].filter(Boolean).join(' ') },
       { t: 'الحالة', srt: 'status', r: (r) => tag(r.status) },
-      ...(has('contribution.verify') || has('contribution.confirm') ? [{ t: '', r: (r) => `
-        ${has('contribution.confirm') && !r.receipt_confirmed ? `<button class="btn sm primary" onclick="event.stopPropagation();APP.confirmReceipt(${r.id})">أقرّ الاستلام</button>` : ''}
+      ...(has('contribution.verify') || has('contribution.confirm') || has('program.preapprove') ? [{ t: '', r: (r) => `
+        ${has('contribution.confirm') && r.association_id && !r.receipt_confirmed ? `<button class="btn sm primary" onclick="event.stopPropagation();APP.confirmReceipt(${r.id})">أقرّ الاستلام</button>` : ''}
+        ${has('impact.submit') && r.receipt_confirmed && !r.impact_doc_id && S.user.scopes.association.includes(r.association_id) ? `<button class="btn sm gold" onclick="event.stopPropagation();APP.uploadImpact(${r.id})">تقرير الأثر</button>` : ''}
+        ${has('program.preapprove') && r.channel === 'direct_program' && !r.program_preapproved && r.status !== 'rejected' ? `<button class="btn sm gold" onclick="event.stopPropagation();APP.preapproveProgram(${r.id})">موافقة مسبقة</button>` : ''}
         ${has('contribution.verify') && r.status !== 'verified' ? `<button class="btn sm" onclick="event.stopPropagation();APP.verifyContribution(${r.id})">تحقّق</button>` : ''}` }] : []),
     ],
     summary: (d) => `<div class="grid g4" style="padding:12px 16px 0">
@@ -151,6 +153,10 @@ route('declarations', async () => {
       { t: 'المخرج', r: (r) => r.outcome ? tag(r.outcome, 'outcome') : '—' },
       ...(has('commitment.declare') ? [{ t: '', r: (r) => !r.submitted_at
         ? `<button class="btn sm primary" onclick="event.stopPropagation();APP.submitDeclaration(${r.id},'${r.tier_code}')">قدّم الإقرار</button>` : '' }] : []),
+      ...(has('app.assess') || has('app.decide') ? [{ t: '', r: (r) => `
+        ${has('app.assess') && r.submitted_at && !r.decided_at ? `<button class="btn sm" onclick="event.stopPropagation();APP.processDeclaration(${r.id})">تسجيل الوقائع</button>` : ''}
+        ${has('app.decide') && r.processed_at && !r.decided_at ? `<button class="btn sm gold" onclick="event.stopPropagation();APP.decideDeclaration(${r.id})">القرار</button>` : ''}
+        ${r.facts_note ? `<div class="muted" style="white-space:normal;max-width:260px">${E(r.facts_note)}</div>` : ''}` }] : []),
     ],
     summary: (d) => `<div class="grid g4" style="padding:12px 16px 0">
       ${stat('النتائج', num(d.total))}
@@ -315,7 +321,8 @@ route('market-tests', async () => {
       <td>${m.published ? '<span class="tag ok">منشور</span>' : '—'}</td></tr>`).join('')}
     </tbody></table></div>
     ${legal('المادة (28): تنفّذ الأمانة سنوياً جولات فحص ميداني في نقاط البيع للتحقق من صحة استعمال العلامة، ومطابقة المستوى المعلن للمستوى الممنوح، ووجود رقم الترخيص، وعدم استعمال العلامة من غير مرخَّص. وتُنشر خلاصة نتائج هذه الجولات في التقرير السنوي.')}`),
-    { title: 'اختبار السوق', sub: 'فحص ميداني في نقاط البيع' });
+    { title: 'اختبار السوق', sub: 'فحص ميداني في نقاط البيع',
+      actions: has('market_test.manage') ? '<button class="btn primary" onclick="APP.newMarketTest()">تسجيل جولة</button>' : '' });
 });
 
 // ================= الجزاءات =================
@@ -546,7 +553,8 @@ route('meetings', async () => {
           `<span class="tag ${a.voting ? 'ok' : 'info'}">${E(a.full_name || a.observer_name || '')}
             ${a.voting ? '' : ' — مراقب'}</span>`).join('')}</div>` : ''}
       </div></div>`).join('') || '<div class="empty"><b>لا اجتماعات</b></div>'}`,
-    { title: 'الاجتماعات والمحاضر', sub: 'المادة (6): الأصل هو النشر — ولا يجوز حجب معلومة إلا بنصٍّ صريح' });
+    { title: 'الاجتماعات والمحاضر', sub: 'المادة (6): الأصل هو النشر — ولا يجوز حجب معلومة إلا بنصٍّ صريح',
+      actions: has('gov.meetings.manage') ? '<button class="btn primary" onclick="APP.newMeeting()">تسجيل اجتماع</button>' : '' });
 });
 
 })();

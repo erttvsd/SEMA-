@@ -72,25 +72,34 @@ function verifyDoc(id) {
 }
 
 // ---------- الطلبات ----------
-function newApplication() {
+function newApplication(preset) {
   const lic = S.user.scopes.licensee[0], org = S.user.scopes.association[0];
-  const kinds = [];
-  if (lic) kinds.push(['licensee', 'ترخيص لمنشأتي']);
-  if (org) kinds.push(['association', 'اعتماد منظمتي']);
-  if (!kinds.length) return toast('حسابك غير مرتبط بملف', 'warn');
-  modal({ title: 'تقديم طلب جديد', body: `<form id="af" class="form-grid">
-    ${F.sel('subject_kind', 'موضوع الطلب', kinds, kinds[0][0], true)}
-    ${F.sel('app_type', 'نوع الطلب', [['license', 'ترخيص جديد'], ['license_renewal', 'تجديد ترخيص'],
-      ['level_upgrade', 'ترقية مستوى'], ['accreditation', 'اعتماد منظمة'], ['accreditation_renewal', 'تجديد اعتماد']], 'license', true)}
-    ${F.sel('requested_level', 'المستوى المطلوب (لطلبات الترخيص)', [['', '— لا ينطبق —'],
-      ...(S.ref?.levels || []).map((l) => [l.level, `المستوى ${l.level} — ${l.name_ar}`])])}
-  </form>${legal('المادة (12): لا تُحصَّل من منظمة المجتمع المدني أي رسوم مقابل التقديم أو التقييم أو الاعتماد أو التجديد. أما طلبات قطاع الأعمال فيُصدر لها رسم طلب غير مستردّ في جميع الأحوال بما فيها حالة الرفض (المادة 34/1).')}`,
+  if (!lic && !org) return toast('حسابك غير مرتبط بملف', 'warn');
+  const kind = lic ? 'licensee' : 'association';
+  const types = kind === 'licensee'
+    ? [['license', 'ترخيص جديد (بعد رفض أو انتهاء)'], ['license_renewal', 'تجديد الترخيص — مع إقرار الامتثال (المادة 18/2)'], ['level_upgrade', 'رفع المستوى (المادة 8/3)']]
+    : [['accreditation', 'اعتماد (بعد رفض أو انتهاء)'], ['accreditation_renewal', 'تجديد الاعتماد (المادة 16)']];
+  modal({ title: 'تقديم طلب', body: `<form id="af" class="form-grid">
+    ${F.sel('app_type', 'نوع الطلب', types, preset || types[1][0], true)}
+    ${kind === 'licensee' ? F.sel('requested_level', 'المستوى المطلوب', (S.ref?.levels || []).map((l) => [l.level, `المستوى ${l.level} — ${l.name_ar}`])) : ''}
+  </form>${legal(kind === 'association'
+    ? 'المادة (12): لا تُحصَّل من منظمة المجتمع المدني أي رسوم مقابل التقديم أو التقييم أو الاعتماد أو التجديد.'
+    : 'لا يجوز رفع المستوى المعلن خلال السنة إلا بطلب جديد وموافقة لجنة منح الترخيص وسداد فرق الرسم إن وُجد (المادة 8/3). ويُقدَّم طلب التجديد مع إقرار الامتثال السنوي (المادة 18/2).')}`,
     actions: [{ label: 'تقديم', cls: 'primary', run: async (el, close) => {
       const b = readForm(el.querySelector('#af'));
-      b.subject_id = b.subject_kind === 'licensee' ? lic : org;
+      b.subject_kind = kind; b.subject_id = kind === 'licensee' ? lic : org;
       if (b.requested_level) b.requested_level = Number(b.requested_level);
-      const r = await post('/applications', b, 'قُدّم الطلب — ' + 'أمام وحدة التقييم عشرة أيام عمل لفحص الاستيفاء');
+      const r = await post('/applications', b, 'قُدِّم الطلب — أمام وحدة التقييم عشرة أيام عمل لفحص الاستيفاء');
       close(); go('applications/' + r.id); } }] });
+}
+
+function resubmitApp(id) {
+  modal({ title: 'استكمال النواقص (المرحلة 3)', body: `
+    ${alertBox('info', 'قبل الإرسال', 'حمّل المستندات الناقصة من «إثباتاتي» أولاً، ثم أرسل الاستكمال — فيعود الطلب إلى وحدة التقييم للفحص.')}
+    <form id="rf" class="form-grid">${F.area('note', 'بيان ما استُكمل', '', 3, true, 'مثال: حُمِّلت شهادة عدم المديونية المحدَّثة وسجل ساعات التطوع')}</form>`,
+    actions: [{ label: 'إرسال الاستكمال', cls: 'primary', run: async (el, close) => {
+      await post(`/applications/${id}/resubmit`, readForm(el.querySelector('#rf')), 'أُرسل الاستكمال'); close(); render(); } },
+      { label: 'تحميل إثبات أولاً', run: (_e, close) => { close(); uploadDoc(); } }] });
 }
 
 function screenApp(id) {
@@ -178,11 +187,37 @@ function confirmReceipt(id) {
   modal({ title: 'إقرار استلام مساهمة — نموذج (5)', body: `
     ${alertBox('info', 'مضمون الإقرار',
       'نتعهد بأن يُصرف هذا المبلغ في الغرض المذكور حصراً، وبتقديم تقرير أثر عنه وفق نموذج (6)، وبإتاحة مستنداته لوحدة التقييم والتحقق عند الطلب.')}
-    <form id="rf" class="form-grid">${F.numf('receipt_doc_id', 'رقم مستند الإقرار المحمَّل (اختياري)')}</form>`,
+    <form id="rf" class="form-grid"><div class="fld" style="grid-column:1/-1"><label>الإقرار الموقّع والمختوم (PDF أو صورة) — اختياري</label>
+      <input type="file" name="file" accept=".pdf,.png,.jpg,.jpeg,.webp"></div></form>`,
     actions: [{ label: 'أقرّ الاستلام', cls: 'primary', run: async (el, close) => {
-      const b = readForm(el.querySelector('#rf'));
-      await post(`/contributions/${id}/confirm-receipt`, { receipt_doc_id: b.receipt_doc_id ? Number(b.receipt_doc_id) : null }, 'سُجّل إقرار الاستلام');
-      close(); render(); } }] });
+      const fd = new FormData(el.querySelector('#rf'));
+      if (!fd.get('file') || !fd.get('file').size) fd.delete('file');
+      try { await api(`/contributions/${id}/confirm-receipt`, { method: 'POST', body: fd }); toast('سُجّل إقرار الاستلام'); close(); render(); }
+      catch (e) { toast(e.message, 'danger'); } } }] });
+}
+
+function uploadImpact(id) {
+  modal({ title: 'تقرير الأثر — نموذج (6)', body: `
+    ${legal('المادة (23/3): تقرير أثر مختصر عن الأموال الواردة عبر العلامة تحديداً، لا عن نشاط المنظمة كله. ويُنشر في السجل العام.')}
+    <form id="if" class="form-grid">
+      ${F.numf('beneficiaries', 'عدد المستفيدين المباشرين')}
+      ${F.numf('spent_pct', 'نسبة الصرف %')}
+      <div class="fld" style="grid-column:1/-1"><label>ملف التقرير (PDF أو Word أو صورة)</label><input type="file" name="file" required
+        accept=".pdf,.doc,.docx,.png,.jpg,.jpeg,.xlsx"></div></form>`,
+    actions: [{ label: 'تقديم التقرير', cls: 'primary', run: async (el, close) => {
+      const fd = new FormData(el.querySelector('#if'));
+      try { await api(`/contributions/${id}/impact`, { method: 'POST', body: fd }); toast('قُدِّم تقرير الأثر ونُشر'); close(); render(); }
+      catch (e) { toast(e.message, 'danger'); } } }] });
+}
+
+function preapproveProgram(id) {
+  modal({ title: 'الموافقة المسبقة على برنامج تنموي ذاتي', body: `
+    ${legal('المادة (20): البرنامج التنموي الذي تنفّذه المنشأة مباشرةً يُحتسب حتى 40% من الالتزام بشرط موافقة مسبقة من لجنة المعايير وتقرير أثر.')}
+    <form id="pf" class="form-grid">${F.sel('approve', 'القرار', [['1', 'موافقة'], ['0', 'رفض']], '1', true)}
+      ${F.area('reason', 'السبب (عند الرفض)', '', 3)}</form>`,
+    actions: [{ label: 'تسجيل', cls: 'primary', run: async (el, close) => {
+      const b = readForm(el.querySelector('#pf'));
+      await post(`/contributions/${id}/preapprove`, { approve: b.approve === '1', reason: b.reason }, 'سُجّل القرار'); close(); render(); } }] });
 }
 
 function verifyContribution(id) {
@@ -216,6 +251,73 @@ function submitDeclaration(id, tier) {
         if (b[k]) b[k] = Number(b[k]); });
       await post(`/declarations/${id}/submit`, b, 'قُدّم الإقرار — بدأت مواعيد المعالجة في المادة (24)');
       close(); render(); } }] });
+}
+
+function processDeclaration(id) {
+  modal({ title: 'معالجة إقرار الامتثال — وحدة التقييم (المادة 24)', body: `
+    ${alertBox('danger', 'وقائع بلا توصية', 'تُسجّل الوحدة ما ثبت من الإثبات المالي وإثبات الصرف، ولجنة منح الترخيص وحدها تقرر التجديد أو الخفض أو التعليق.')}
+    <form id="pf" class="form-grid">
+      ${F.sel('status', 'المرحلة', [['desk_review', 'تدقيق مكتبي جارٍ'], ['field_audit', 'تدقيق ميداني جارٍ'],
+        ['accepted', 'اكتملت الوقائع — الالتزام موثَّق'], ['deficient', 'اكتملت الوقائع — عجز أو نقص']], 'accepted', true)}
+      ${F.area('facts_note', 'بيان الوقائع', '', 5, true, 'مثال: طوبق الإقرار الضريبي مع القوائم المالية؛ وطوبقت إيصالات التحويل مع إقرارات الاستلام من ثلاث منظمات…')}
+    </form>`, actions: [{ label: 'تسجيل الوقائع', cls: 'primary', run: async (el, close) => {
+      const r = await post(`/declarations/${id}/process`, readForm(el.querySelector('#pf')), 'سُجّلت الوقائع');
+      if (r.commitment_assessment) toast('تكييف الالتزام: ' + r.commitment_assessment.message, r.commitment_assessment.status === 'fulfilled' ? '' : 'warn');
+      close(); render(); } }] });
+}
+function decideDeclaration(id) {
+  modal({ title: 'قرار لجنة منح الترخيص على الإقرار (المادة 24)', body: `<form id="df" class="form-grid">
+    ${F.sel('outcome', 'القرار', [['renew', 'تجديد'], ['downgrade', 'خفض المستوى — عجز دون 20% (المادة 29/3)'],
+      ['suspend', 'تعليق — عجز يتجاوز 20% (المادة 29/4)'], ['withdraw', 'سحب — بيانات غير صحيحة عمداً (المادة 29/8)']], 'renew', true)}
+    ${F.area('reason', 'التسبيب الكتابي', '', 5, true)}</form>`,
+    actions: [{ label: 'إصدار القرار', cls: 'primary', run: async (el, close) => {
+      await post(`/declarations/${id}/decide`, readForm(el.querySelector('#df')), 'صدر القرار'); close(); render(); } }] });
+}
+function scheduleAudit(kind, id) {
+  modal({ title: 'جدولة تدقيق', body: `<form id="sf" class="form-grid">
+    ${F.sel('audit_type', 'النوع', [['field', 'تدقيق ميداني معلن'], ['desk', 'تدقيق مكتبي'], ['unannounced', 'زيارة غير معلنة'], ['compliance_review', 'مراجعة امتثال']], 'field', true)}
+    ${F.sel('trigger', 'السبب', Object.entries(L.trigger), 'random', true)}
+    ${F.date('scheduled_date', 'الموعد', today())}</form>
+    ${legal('المادة (26/3): يُحظر إخطار المرخَّص له بموعد أي زيارة غير معلنة بأي وسيلة — ولا تظهر في ملفه قبل تنفيذها. والمادة (20/4): يُحظر على المقيّم تقييم جهة سبق أن قدّم لها خدمة خلال سنتين.')}`,
+    actions: [{ label: 'جدولة', cls: 'primary', run: async (el, close) => {
+      const b = readForm(el.querySelector('#sf')); b.subject_kind = kind; b.subject_id = id;
+      const r = await post('/audits', b, 'جُدول التدقيق'); close(); go('audits/' + r.id); } }] });
+}
+function newMarketTest() {
+  modal({ title: 'تسجيل جولة اختبار سوق (المادة 28)', wide: true, body: `<form id="mf" class="form-grid">
+    ${F.txt('round_name', 'اسم الجولة', '', true)}${F.txt('city', 'المدينة', '', true)}${F.date('conducted_on', 'التاريخ', today())}
+    ${F.numf('outlets_visited', 'نقاط البيع المزارة', '', true)}${F.numf('items_checked', 'الأصناف المفحوصة', '', true)}
+    ${F.numf('correct_usage', 'استعمال صحيح', 0)}${F.numf('missing_license_no', 'بلا رقم ترخيص', 0)}
+    ${F.numf('level_mismatch', 'مستوى معلن مخالف', 0)}${F.numf('out_of_scope', 'خارج نطاق الترخيص', 0)}
+    ${F.numf('unlicensed_usage', 'استعمال من غير مرخَّص', 0)}
+    ${F.sel('published', 'النشر في التقرير السنوي', [['1', 'نعم'], ['', 'لا']], '1')}</form>`,
+    actions: [{ label: 'تسجيل', cls: 'primary', run: async (el, close) => {
+      const b = readForm(el.querySelector('#mf'));
+      for (const k of Object.keys(b)) if (!['round_name', 'city', 'conducted_on'].includes(k)) b[k] = Number(b[k] || 0);
+      await post('/market-tests', b, 'سُجّلت الجولة'); close(); render(); } }] });
+}
+async function newMeeting() {
+  const [users, obs] = await Promise.all([api('/users?per_page=200').catch(() => ({ rows: [] })), api('/observers?status=admitted&per_page=50')]);
+  const members = users.rows.filter((u) => u.roles.some((r) => ['BOARD_MEMBER', 'BOARD_CHAIR', 'STANDARDS_COMMITTEE', 'LICENSING_COMMITTEE',
+    'APPEALS_COMMITTEE', 'INTEGRITY_COMMITTEE', 'GENERAL_ASSEMBLY'].includes(r.role_code)));
+  modal({ title: 'تسجيل اجتماع ومحضره', wide: true, body: `<form id="mf" class="form-grid">
+    ${F.sel('body', 'الجهة', Object.entries(L.body), 'board', true)}
+    ${F.txt('title', 'العنوان', '', true)}${F.txt('meeting_no', 'رقم الاجتماع')}${F.date('held_on', 'التاريخ', today())}
+    ${F.sel('is_public', 'المحضر منشور', [['1', 'نعم'], ['', 'لا']], '1')}
+    ${F.area('decisions', 'القرارات', '', 4, true)}</form>
+    <h4 style="margin-top:12px">الحاضرون ذوو الصوت</h4>
+    <div class="form-grid">${members.map((u) => `<label style="font-size:.82rem;display:flex;gap:6px"><input type="checkbox" class="att" value="${u.id}">
+      ${E(u.full_name)} <span class="muted">— ${E(u.roles.map((r) => r.name_ar).join('، '))}</span></label>`).join('')}</div>
+    <h4 style="margin-top:12px">المراقبون (اجتماعات المجلس فقط — بلا صوت)</h4>
+    <div class="form-grid">${obs.rows.map((o) => `<label style="font-size:.82rem;display:flex;gap:6px"><input type="checkbox" class="obs" value="${o.id}">
+      ${E(o.person_name)} <span class="muted">— ${E(o.nominating_entity)}</span></label>`).join('') || '<span class="muted">لا مراقبين مقبولين</span>'}</div>
+    ${legal('النصاب: المجلس ستة من أحد عشر، ولجنة المعايير ثلاثة، ولجان الترخيص والتظلمات اثنان، ولجنة النزاهة ثلاثة (المادة 16).')}`,
+    actions: [{ label: 'تسجيل', cls: 'primary', run: async (el, close) => {
+      const b = readForm(el.querySelector('#mf'));
+      b.is_public = b.is_public === '1';
+      b.attendee_ids = [...el.querySelectorAll('.att:checked')].map((c) => Number(c.value));
+      b.observer_ids = [...el.querySelectorAll('.obs:checked')].map((c) => Number(c.value));
+      await post('/meetings', b, 'سُجّل الاجتماع'); close(); render(); } }] });
 }
 
 // ---------- التصاميم ----------
@@ -604,7 +706,8 @@ function showDiff(json) {
       overflow:auto;max-height:420px;font-size:.74rem">${E(pp(d.a))}</pre></div></div>` });
 }
 
-window.APP = { uploadDoc, verifyDoc, newApplication, screenApp, factsReport, decideApp,
+window.APP = { resubmitApp, uploadImpact, preapproveProgram, processDeclaration, decideDeclaration, scheduleAudit,
+  newMarketTest, newMeeting, uploadDoc, verifyDoc, newApplication, screenApp, factsReport, decideApp,
   newContribution, confirmReceipt, verifyContribution, submitDeclaration, newDesign, decideDesign,
   auditReport, newSanction, fileAppeal, fileAppealApp, decideAppeal, triageComplaint,
   newIntegrityNote, publishIntegrity, respondIntegrity, nominateObserver, decideObserver,

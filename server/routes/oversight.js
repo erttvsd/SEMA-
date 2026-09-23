@@ -6,6 +6,7 @@ const { db } = require('../db');
 const { can, requireAuth, hasPerm, ownsLicensee, ownsAssociation, log, notify } = require('../auth');
 const { buildList } = require('../query');
 const R = require('../rules');
+const S = require('../services');
 
 const r = express.Router();
 const nextRef = (prefix, table) => `${prefix}-${String(db.prepare(`SELECT COUNT(*) n FROM ${table}`).get().n + 1).padStart(5, '0')}`;
@@ -125,7 +126,10 @@ r.post('/audits', requireAuth, can('audit.execute', 'audit.unannounced'), (req, 
     return res.status(403).json({ error: 'الزيارات غير المعلنة مقصورة على المدققين المفوَّضين' });
   // المادة 20/4: حظر تقييم جهة سبقت للمقيّم معها علاقة مهنية
   const conflict = db.prepare(`SELECT 1 FROM integrity_pledges WHERE user_id=? AND kind='annual_interests'
-      AND has_conflict=1 AND details LIKE ?`).get(req.user.id, `%${subject_id}%`);
+      AND has_conflict=1 AND details LIKE ?`).get(req.user.id, `%(الملف ${Number(subject_id)})%`);
+  if (!['licensee', 'association'].includes(subject_kind)) return res.status(400).json({ error: 'نوع الجهة غير صالح' });
+  if (!Object.keys({ desk: 1, field: 1, unannounced: 1, compliance_review: 1 }).includes(audit_type))
+    return res.status(400).json({ error: 'نوع التدقيق غير صالح' });
   if (conflict) return res.status(422).json({ error: 'تعارض مصالح معلن — يُحظر على المقيّم تقييم هذه الجهة (المادة 20/4)' });
   const info = db.prepare(`INSERT INTO audits (reference, subject_kind, subject_id, fiscal_year, audit_type,
       trigger, scheduled_date, assessor_id, status) VALUES (?,?,?,?,?,?,?,?, 'planned')`).run(
@@ -162,6 +166,13 @@ r.get('/market-tests', requireAuth, can('market_test.manage', 'report.view'), (_
 });
 r.post('/market-tests', requireAuth, can('market_test.manage'), (req, res) => {
   const b = req.body;
+  const n = (k) => Number(b[k] || 0);
+  if (!b.round_name || !b.city || !b.conducted_on) return res.status(400).json({ error: 'اسم الجولة والمدينة والتاريخ مطلوبة' });
+  const parts = ['correct_usage', 'missing_license_no', 'level_mismatch', 'out_of_scope', 'unlicensed_usage'];
+  if ([...parts, 'outlets_visited', 'items_checked'].some((k) => n(k) < 0 || !Number.isInteger(n(k))))
+    return res.status(400).json({ error: 'الأعداد يجب أن تكون صحيحة غير سالبة' });
+  if (parts.reduce((t, k) => t + n(k), 0) > n('items_checked'))
+    return res.status(422).json({ error: 'مجموع النتائج يتجاوز عدد الأصناف المفحوصة' });
   const info = db.prepare(`INSERT INTO market_tests (round_name, city, conducted_on, outlets_visited, items_checked,
       correct_usage, missing_license_no, level_mismatch, out_of_scope, unlicensed_usage, published)
       VALUES (?,?,?,?,?,?,?,?,?,?,?)`).run(b.round_name, b.city, b.conducted_on, b.outlets_visited,
@@ -210,46 +221,18 @@ r.post('/sanctions', requireAuth, can('sanction.decide'), (req, res) => {
   const { subject_kind, subject_id, subject_name, violation_code, measure, reason,
           source_audit_id, fine_amount, grace_days } = req.body;
   if (!reason || reason.trim().length < 10) return res.status(422).json({ error: 'التسبيب الكتابي مطلوب' });
-  const v = db.prepare('SELECT * FROM violation_codes WHERE code=?').get(violation_code);
-  const m = measure || v?.default_measure;
-  const today = new Date().toISOString().slice(0, 10);
-  let effective_to = null, auto = null, reapply = null, publish = 0, publishUntil = null;
-  if (m === 'suspension') { effective_to = R.addDays(today, 180); auto = 'withdrawal'; publish = 1; } // 6 أشهر ثم سحب تلقائي (المادة 30/2)
-  if (m === 'withdrawal') { publish = 1; publishUntil = R.addDays(today, 365); // منشور 12 شهراً (المادة 31/1)
-    reapply = R.addDays(today, (v?.reapply_ban_months || 12) * 30); }
-  if (v?.publish) publish = 1;
-  const info = db.prepare(`INSERT INTO sanctions (case_no, subject_kind, subject_id, subject_name, violation_code,
-      measure, fine_amount, grace_days, reason, source_audit_id, decided_by, effective_from, effective_to,
-      auto_escalate_to, published, publish_until, reapply_allowed_from)
-      VALUES (?,?,?,?,?,?,?,?,?,?,?,date('now'),?,?,?,?,?)`).run(
-    nextRef('SNC', 'sanctions'), subject_kind, subject_id || null, subject_name || null, violation_code || null,
-    m, fine_amount || null, grace_days || null, reason, source_audit_id || null, req.user.id,
-    effective_to, auto, publish, publishUntil, reapply);
-
-  // أثر الجزاء على حالة الجهة + السجل العام
-  if (subject_kind === 'licensee' && subject_id) {
-    if (m === 'suspension') db.prepare("UPDATE licensees SET status='suspended', status_reason=? WHERE id=?").run(reason, subject_id);
-    if (m === 'withdrawal') db.prepare("UPDATE licensees SET status='withdrawn', status_reason=? WHERE id=?").run(reason, subject_id);
-    if (m === 'level_downgrade') {
-      const l = db.prepare('SELECT level FROM licensees WHERE id=?').get(subject_id);
-      db.prepare('UPDATE licensees SET level=? WHERE id=?').run(Math.max(1, (l.level || 1) - 1), subject_id);
-    }
-  }
-  if (subject_kind === 'association' && subject_id) {
-    if (m === 'suspension') db.prepare("UPDATE associations SET status='suspended', status_reason=? WHERE id=?").run(reason, subject_id);
-    if (m === 'withdrawal') db.prepare("UPDATE associations SET status='revoked', status_reason=? WHERE id=?").run(reason, subject_id);
-  }
-  // إخطار المنظمات المتلقية عند التعليق (المادة 30/1)
-  if (m === 'suspension' && subject_kind === 'licensee') {
-    const orgs = db.prepare('SELECT DISTINCT association_id FROM contributions WHERE licensee_id=? AND association_id IS NOT NULL').all(subject_id);
-    for (const o of orgs) {
-      const u = db.prepare("SELECT user_id FROM user_roles WHERE scope_kind='association' AND scope_id=?").get(o.association_id);
-      if (u) notify({ user_id: u.user_id, title: 'إخطار بتعليق مرخَّص له',
-        body: 'عُلِّق ترخيص أحد المساهمين إليكم — يوقف كل استعمال جديد للعلامة (المادة 30/1)', severity: 'warning' });
-    }
-  }
-  log(req, 'sanction.decide', subject_kind, subject_id, `${m}: ${reason.slice(0, 120)}`);
-  res.status(201).json(db.prepare('SELECT * FROM sanctions WHERE id=?').get(info.lastInsertRowid));
+  if (!['licensee', 'association', 'unlicensed'].includes(subject_kind)) return res.status(400).json({ error: 'نوع الجهة غير صالح' });
+  if (!db.prepare('SELECT 1 FROM violation_codes WHERE code=?').get(violation_code))
+    return res.status(400).json({ error: 'بند المخالفة غير معروف (المادة 29)' });
+  if (subject_kind !== 'unlicensed') {
+    const t = subject_kind === 'licensee' ? 'licensees' : 'associations';
+    if (!db.prepare(`SELECT 1 FROM ${t} WHERE id=?`).get(subject_id)) return res.status(404).json({ error: 'الجهة غير موجودة' });
+  } else if (!subject_name) return res.status(400).json({ error: 'اسم الجهة غير المرخَّصة مطلوب' });
+  if (fine_amount != null && fine_amount !== '' && !(Number(fine_amount) >= 0)) return res.status(400).json({ error: 'قيمة الغرامة غير صالحة' });
+  const row = db.transaction(() => S.createSanction(req.user.id, { subject_kind, subject_id, subject_name,
+    violation_code, measure, reason, source_audit_id, fine_amount, grace_days }))();
+  log(req, 'sanction.decide', subject_kind, subject_id, `${row.measure}: ${reason.slice(0, 120)}`);
+  res.status(201).json(row);
 });
 
 // ================= التظلمات (المادة 22) =================
@@ -456,16 +439,19 @@ r.get('/complaints', requireAuth, can('complaint.triage', 'complaint.file'), (re
 r.post('/complaints', (req, res) => {
   const { channel, is_anonymous, reporter_name, reporter_contact, subject_kind, subject_id, subject_name, body } = req.body;
   if (!body || body.trim().length < 10) return res.status(400).json({ error: 'نص البلاغ مطلوب' });
+  if (body.length > 5000) return res.status(400).json({ error: 'نص البلاغ طويل جداً' });
+  const tracking = crypto.randomBytes(4).toString('hex').toUpperCase();
   const info = db.prepare(`INSERT INTO complaints (reference, channel, is_anonymous, reporter_name, reporter_contact,
-      subject_kind, subject_id, subject_name, body, whistleblower_protected)
-      VALUES (?,?,?,?,?,?,?,?,?,1)`).run(nextRef('CMP', 'complaints'), channel || 'portal',
+      subject_kind, subject_id, subject_name, body, whistleblower_protected, tracking_code)
+      VALUES (?,?,?,?,?,?,?,?,?,1,?)`).run(nextRef('CMP', 'complaints'), channel || 'portal',
     is_anonymous ? 1 : 0, is_anonymous ? null : (reporter_name || null), is_anonymous ? null : (reporter_contact || null),
-    subject_kind || null, subject_id || null, subject_name || null, body);
+    subject_kind || null, subject_id || null, subject_name || null, body, tracking);
   notify({ role_code: 'INTEGRITY_COMMITTEE', title: 'بلاغ جديد', body: body.slice(0, 120), severity: 'warning', link: '#/complaints' });
   notify({ role_code: 'EVAL_DIRECTOR', title: 'بلاغ جديد — يستوجب تدقيقاً فورياً 100%',
     body: 'أي ملف ورد بشأنه بلاغ أو شكوى: تدقيق ميداني 100% وفوري (المادة 25)', severity: 'danger', link: '#/complaints' });
   res.status(201).json({ reference: db.prepare('SELECT reference FROM complaints WHERE id=?').get(info.lastInsertRowid).reference,
-    note: 'قناة سرّية وحماية للمبلّغين — لا يُفصح عن هوية المبلّغ (المادة 29)' });
+    tracking_code: tracking,
+    note: 'قناة سرّية وحماية للمبلّغين — لا يُفصح عن هوية المبلّغ (المادة 29). احفظ الرقم المرجعي ورمز المتابعة لمتابعة البلاغ.' });
 });
 
 r.post('/complaints/:id/triage', requireAuth, can('complaint.triage'), (req, res) => {
@@ -503,5 +489,30 @@ r.get('/meetings', requireAuth, can('gov.meetings.view', 'gov.attend'), (req, re
         LEFT JOIN observers o ON o.id=ma.observer_id WHERE ma.meeting_id=?`).all(m.id);
   res.json(out);
 });
+
+// إنشاء اجتماع بمحضره وحضوره — والمراقب يحضر اجتماعات المجلس بلا صوت (المادة 34)
+r.post('/meetings', requireAuth, can('gov.meetings.manage'), (req, res) => {
+  const { body, title, meeting_no, held_on, decisions, attendee_ids = [], observer_ids = [], is_public } = req.body;
+  if (!L_BODIES.includes(body)) return res.status(400).json({ error: 'جهة الاجتماع غير صالحة' });
+  if (!title || !held_on || !decisions) return res.status(400).json({ error: 'العنوان والتاريخ والقرارات مطلوبة' });
+  if (observer_ids.length && body !== 'board') return res.status(422).json({ error: 'حضور المراقبين مقصور على اجتماعات مجلس الأمناء (المادة 34)' });
+  const admitted = new Set(db.prepare("SELECT id FROM observers WHERE status='admitted'").all().map((o) => o.id));
+  for (const o of observer_ids) if (!admitted.has(Number(o))) return res.status(422).json({ error: `المراقب ${o} غير مقبول في الدورة` });
+  const quorum = { board: 6, general_assembly: null, standards: 3, licensing: 2, appeals: 2, integrity: 3 }[body];
+  if (quorum && attendee_ids.length < quorum)
+    return res.status(422).json({ error: `النصاب غير مكتمل: ${attendee_ids.length} من ${quorum} على الأقل (المادة 16)` });
+  const id = db.transaction(() => {
+    const mid = db.prepare(`INSERT INTO meetings (body, title, meeting_no, held_on, quorum_required, attendees_count,
+        observers_count, decisions, is_public) VALUES (?,?,?,?,?,?,?,?,?)`).run(body, title, meeting_no || null, held_on,
+      quorum, attendee_ids.length, observer_ids.length, decisions, is_public ? 1 : 0).lastInsertRowid;
+    const st = db.prepare('INSERT INTO meeting_attendance (meeting_id, user_id, observer_id, role_at_meeting, attended, voting) VALUES (?,?,?,?,1,?)');
+    for (const u of attendee_ids) st.run(mid, Number(u), null, 'عضو', 1);
+    for (const o of observer_ids) st.run(mid, null, Number(o), 'مراقب — حضور ومداخلة بلا صوت', 0);
+    return mid;
+  })();
+  log(req, 'meeting.create', 'meeting', id, title);
+  res.status(201).json(db.prepare('SELECT * FROM meetings WHERE id=?').get(id));
+});
+const L_BODIES = ['board', 'general_assembly', 'standards', 'licensing', 'appeals', 'integrity'];
 
 module.exports = r;

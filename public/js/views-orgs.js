@@ -82,6 +82,9 @@ route('associations', async (r) => {
     <div class="card"><div id="tb"></div></div>`, {
     title: d.name, sub: `${E(d.focus_areas || '')} · ${E(d.region || '')} — ${E(d.city || '')} · تأسّست ${yr(d.established_year)}`,
     actions: `${d.accreditation_no ? `<a class="btn" href="#/verify/${E(d.accreditation_no)}">صفحة التحقق العامة</a>` : ''}
+      ${d.accreditation_no && ['accredited', 'suspended'].includes(d.status) ? `<a class="btn" href="#/certificate/${E(d.accreditation_no)}">الشهادة</a>` : ''}
+      ${has('audit.execute') ? `<button class="btn" onclick="APP.scheduleAudit('association',${d.id})">جدولة تدقيق</button>` : ''}
+      ${has('app.create') && S.user.scopes.association.includes(d.id) ? `<button class="btn gold" onclick="APP.newApplication('accreditation_renewal')">طلب تجديد</button>` : ''}
       ${has('org.assess_criteria') ? `<button class="btn primary" onclick="APP.assessCriteria(${d.id})">تقييم المعايير</button>` : ''}
       ${has('org.edit.all') || has('org.edit.own') ? `<button class="btn" onclick="APP.editOrg(${d.id})">تحديث البيانات</button>` : ''}` });
 
@@ -155,7 +158,8 @@ route('associations', async (r) => {
           <td>${x.impact_doc_id ? '<span class="tag ok">مقدَّم</span>' : '<span class="tag warn">مستحق</span>'}</td>
           <td>${tag(x.status)}</td>
           ${has('contribution.confirm') ? `<td>${!x.receipt_confirmed
-            ? `<button class="btn sm primary" onclick="APP.confirmReceipt(${x.id})">أقرّ الاستلام</button>` : ''}</td>` : ''}</tr>`).join('')
+            ? `<button class="btn sm primary" onclick="APP.confirmReceipt(${x.id})">أقرّ الاستلام</button>`
+            : (!x.impact_doc_id && has('impact.submit') ? `<button class="btn sm gold" onclick="APP.uploadImpact(${x.id})">تقرير الأثر</button>` : '')}</td>` : ''}</tr>`).join('')
           : '<tr><td colspan="12"><div class="empty"><b>لا مساهمات</b></div></td></tr>'}</tbody></table></div>
       ${legal('المادة (23/3): يُقدَّم من المنظمة المعتمدة تقرير أثر مختصر عن الأموال الواردة إليها عبر العلامة تحديداً، لا عن نشاطها كله.')}</div>`],
 
@@ -277,11 +281,14 @@ route('applications', async (r) => {
 
 function actionBtns(d) {
   const b = [];
-  if (has('app.screen') && d.stage <= 3 && !d.decided_at)
+  if (has('app.screen') && ['submitted', 'completing'].includes(d.status))
     b.push(`<button class="btn primary sm" onclick="APP.screenApp(${d.id})">فحص الاستيفاء الشكلي</button>`);
-  if (has('app.facts_report') && d.stage >= 4 && d.stage < 7 && !d.facts_report_id)
+  if (has('app.create') && d.status === 'deficiencies' && (S.user.scopes.licensee.includes(d.subject_id) && d.subject_kind === 'licensee'
+      || S.user.scopes.association.includes(d.subject_id) && d.subject_kind === 'association'))
+    b.push(`<button class="btn gold sm" onclick="APP.resubmitApp(${d.id})">استكمال النواقص</button>`);
+  if (has('app.facts_report') && ['assessment', 'field_visit'].includes(d.status) && !d.facts_report_id)
     b.push(`<button class="btn primary sm" onclick="APP.factsReport(${d.id})">رفع تقرير الوقائع</button>`);
-  if (has('app.decide') && d.facts_report_id && !d.decided_at)
+  if (has('app.decide') && d.status === 'decision_pending')
     b.push(`<button class="btn gold sm" onclick="APP.decideApp(${d.id},${d.requested_level || 1})">القرار المسبَّب</button>`);
   if (has('appeal.file') && d.decision === 'reject')
     b.push(`<button class="btn sm" onclick="APP.fileAppealApp(${d.id},'${d.subject_kind}',${d.subject_id})">تقديم تظلم</button>`);

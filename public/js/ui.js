@@ -51,6 +51,7 @@ function navGroups() {
   if (has('gov.meetings.view') || has('gov.attend')) gov.push(['meetings', 'الاجتماعات والمحاضر', 'list']);
   if (has('observer.nominate') || has('observer.admit') || hasRole('OBSERVER')) gov.push(['observers', 'المراقبون', 'eye']);
   if (has('standards.propose') || has('standards.approve')) gov.push(['standards', 'المعايير والرسوم', 'badge']);
+  if (has('standards.propose') || has('standards.approve') || has('gov.bylaws.amend')) gov.push(['proposals', 'مقترحات التعديل والمشاورة', 'list']);
   if (gov.length) g.push({ title: 'الحوكمة', items: gov });
 
   const rep = [];
@@ -61,9 +62,11 @@ function navGroups() {
   if (rep.length) g.push({ title: 'التقارير', items: rep });
 
   const adm = [];
+  adm.push(['profile', 'حسابي', 'users']);
   adm.push(['rbac', 'الأدوار والصلاحيات', 'shield']);
   if (has('admin.users')) adm.push(['users', 'المستخدمون', 'users']);
   if (has('admin.log')) adm.push(['audit-log', 'سجل التتبع', 'list']);
+  if (has('admin.settings') || has('admin.log')) adm.push(['jobs', 'المهام الآلية', 'gear']);
   if (has('admin.settings')) adm.push(['settings', 'الإعدادات', 'gear']);
   g.push({ title: 'النظام', items: adm });
   return g;
@@ -73,7 +76,7 @@ const dedupe = (arr) => { const s = new Set(); return arr.filter(([a, b]) => { c
 function shell(content, { title, sub, actions = '' } = {}) {
   const cur = S.route.name;
   const nav = navGroups().map((g) => `<div class="side-grp"><h5>${E(g.title)}</h5>${
-    g.items.map(([h, t, i]) => `<a href="#/${h}" class="${cur === h ? 'on' : ''}">${ic(i)}<span>${E(t)}</span></a>`).join('')
+    g.items.map(([h, t, i]) => `<a href="#/${h}" onclick="document.getElementById('side').classList.remove('open')" class="${cur === h ? 'on' : ''}">${ic(i)}<span>${E(t)}</span></a>`).join('')
   }</div>`).join('');
   return `<div class="app">
     ${topbar()}
@@ -90,8 +93,8 @@ function shell(content, { title, sub, actions = '' } = {}) {
 function topbar() {
   const u = S.user;
   return `<header class="topbar"><div class="topbar-in">
-    <button class="btn sm" onclick="document.getElementById('side').classList.toggle('open')"
-      style="display:none" id="burger">☰</button>
+    ${S.user ? `<button class="btn sm" onclick="document.getElementById('side')?.classList.toggle('open')"
+      id="burger" aria-label="القائمة">☰</button>` : ''}
     <a href="#/dashboard" class="logo"><span class="logo-mark">${LOGO}</span>
       <span class="logo-txt"><b>سِيمَا الخَيْر</b><span>تَعْرِفُهُم بِسِيمَاهُم</span></span></a>
     <div class="spacer"></div>

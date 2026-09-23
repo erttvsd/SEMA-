@@ -161,6 +161,8 @@ function partnerDash(d) {
 
   ${card('إجراءات سريعة', `<div class="btn-row">
     <a class="btn primary" href="#/my-licensee">ملف منشأتي كاملاً</a>
+    ${l.license_no ? `<a class="btn" href="#/certificate/${E(l.license_no)}">شهادة الترخيص ورمز QR</a>` : ''}
+    <button class="btn" onclick="APP.newApplication()">تجديد أو رفع المستوى</button>
     <a class="btn" href="#/documents">تحميل إثبات</a>
     <a class="btn" href="#/contributions">تسجيل مساهمة</a>
     <a class="btn" href="#/designs">طلب موافقة على تصميم</a>
@@ -206,6 +208,8 @@ function orgDash(d) {
 
   ${card('إجراءات سريعة', `<div class="btn-row">
     <a class="btn primary" href="#/my-org">ملف منظمتي كاملاً</a>
+    ${a.accreditation_no ? `<a class="btn" href="#/certificate/${E(a.accreditation_no)}">شهادة الاعتماد ورمز QR</a>` : ''}
+    <button class="btn" onclick="APP.newApplication('accreditation_renewal')">طلب تجديد الاعتماد</button>
     <a class="btn" href="#/documents">تحميل إثبات</a>
     <a class="btn" href="#/contributions">المساهمات وتقارير الأثر</a>
     <a class="btn" href="#/audits">تقارير التدقيق على ملفي</a>
@@ -296,6 +300,9 @@ route('licensees', async (r) => {
     <div class="card"><div id="tb"></div></div>`, {
     title: d.legal_name, sub: `${E(d.trade_name || '')} · ${E(d.sector || '')} · ${E(d.region || '')} — ${E(d.city || '')}`,
     actions: `${d.license_no ? `<a class="btn" href="#/verify/${E(d.license_no)}">صفحة التحقق العامة</a>` : ''}
+      ${d.license_no && ['active', 'suspended'].includes(d.status) ? `<a class="btn" href="#/certificate/${E(d.license_no)}">الشهادة</a>` : ''}
+      ${has('audit.execute') ? `<button class="btn" onclick="APP.scheduleAudit('licensee',${d.id})">جدولة تدقيق</button>` : ''}
+      ${has('app.create') && S.user.scopes.licensee.includes(d.id) ? `<button class="btn gold" onclick="APP.newApplication()">تجديد أو رفع المستوى</button>` : ''}
       ${has('licensee.edit.all') || has('licensee.edit.own') ? `<button class="btn primary" onclick="APP.editLicensee(${d.id})">تحديث البيانات</button>` : ''}` });
 
   mount(() => tabs(document.getElementById('tb'), [

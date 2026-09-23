@@ -4,7 +4,11 @@ const jwt = require('jsonwebtoken');
 const { db } = require('./db');
 const { permissionsFor } = require('./rbac');
 
-const SECRET = process.env.SEMA_JWT_SECRET || 'sema-alkhayr-dev-secret-change-in-production';
+const DEV_SECRET = 'sema-alkhayr-dev-secret-change-in-production';
+const SECRET = process.env.SEMA_JWT_SECRET || DEV_SECRET;
+if (process.env.NODE_ENV === 'production' && SECRET === DEV_SECRET) {
+  throw new Error('SEMA_JWT_SECRET يجب تعيينه في بيئة الإنتاج');
+}
 const TTL = '12h';
 
 function loadUser(userId) {
@@ -27,10 +31,36 @@ function issueToken(user) {
   return jwt.sign({ uid: user.id, email: user.email }, SECRET, { expiresIn: TTL });
 }
 
-function login(email, password) {
+/** سياسة كلمة المرور: ثمانية أحرف على الأقل تجمع حروفاً وأرقاماً */
+function passwordProblem(pw) {
+  const p = String(pw || '');
+  if (p.length < 8) return 'كلمة المرور ثمانية أحرف على الأقل';
+  if (p.length > 128) return 'كلمة المرور طويلة جداً';
+  if (!/[0-9]/.test(p) || !/[^0-9\s]/.test(p)) return 'كلمة المرور تجمع حروفاً وأرقاماً';
+  return null;
+}
+
+// حدّ محاولات الدخول: خمس محاولات فاشلة لكل بريد وعنوان خلال خمس عشرة دقيقة
+const attempts = new Map();
+const WINDOW = 15 * 60 * 1000, MAX_FAIL = 5;
+function throttled(key) {
+  const a = attempts.get(key);
+  if (!a) return false;
+  if (Date.now() - a.first > WINDOW) { attempts.delete(key); return false; }
+  return a.n >= MAX_FAIL;
+}
+function recordFail(key) {
+  const a = attempts.get(key);
+  if (!a || Date.now() - a.first > WINDOW) attempts.set(key, { n: 1, first: Date.now() });
+  else a.n++;
+}
+
+function login(email, password, ip) {
+  const key = String(email || '').trim().toLowerCase() + '|' + (ip || '');
+  if (throttled(key)) return { error: 'محاولات كثيرة فاشلة — أعد المحاولة بعد خمس عشرة دقيقة', status: 429 };
   const row = db.prepare('SELECT id, password_hash, status FROM users WHERE lower(email)=lower(?)').get(String(email || '').trim());
-  if (!row) return { error: 'بيانات الدخول غير صحيحة' };
-  if (!bcrypt.compareSync(String(password || ''), row.password_hash)) return { error: 'بيانات الدخول غير صحيحة' };
+  if (!row || !bcrypt.compareSync(String(password || ''), row.password_hash)) { recordFail(key); return { error: 'بيانات الدخول غير صحيحة' }; }
+  attempts.delete(key);
   if (row.status !== 'active') return { error: 'الحساب موقوف — راجع الأمانة' };
   db.prepare("UPDATE users SET last_login_at=datetime('now') WHERE id=?").run(row.id);
   const user = loadUser(row.id);
@@ -44,7 +74,10 @@ function attachUser(req, _res, next) {
   if (t) {
     try {
       const p = jwt.verify(t, SECRET);
-      req.user = loadUser(p.uid);
+      const row = db.prepare('SELECT status, password_changed_at FROM users WHERE id=?').get(p.uid);
+      // الرمز يسقط بإيقاف الحساب أو بتغيير كلمة المرور بعد إصداره
+      const changed = row?.password_changed_at ? Date.parse(row.password_changed_at + 'Z') / 1000 : 0;
+      if (row && row.status === 'active' && !(changed && p.iat < Math.floor(changed))) req.user = loadUser(p.uid);
     } catch { /* رمز غير صالح — يُعامل كزائر */ }
   }
   next();
@@ -97,4 +130,4 @@ function notify({ user_id, role_code, title, body, severity = 'info', link = nul
     .run(user_id || null, role_code || null, title, body, severity, link);
 }
 
-module.exports = { login, loadUser, attachUser, requireAuth, can, hasPerm, ownsLicensee, ownsAssociation, log, notify, bcrypt };
+module.exports = { passwordProblem, issueToken, login, loadUser, attachUser, requireAuth, can, hasPerm, ownsLicensee, ownsAssociation, log, notify, bcrypt };

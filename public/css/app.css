@@ -305,3 +305,53 @@ table.tbl .muted{color:var(--ink-3);font-size:.8rem}
   body{background:#fff}
   .card{box-shadow:none;break-inside:avoid}
 }
+
+/* ===== الإقرارات ===== */
+.pledge{display:flex;gap:9px;align-items:flex-start;padding:9px 12px;border:1px solid var(--line);border-radius:var(--r-s);
+  margin-bottom:7px;background:var(--surface-3);font-size:.86rem;cursor:pointer}
+.pledge input{margin-top:5px;flex:0 0 auto;width:16px;height:16px;accent-color:var(--green)}
+.pledge:has(input:checked){border-color:var(--green-4);background:#E9F3EE}
+
+/* ===== القائمة على الشاشات الصغيرة ===== */
+#burger{display:none}
+@media(max-width:820px){
+  #burger{display:inline-flex}
+  .topbar-in .logo-txt span{display:none}
+  .pub-nav-in{overflow-x:auto;flex-wrap:nowrap}
+  .pub-nav a{white-space:nowrap}
+}
+
+/* ===== الشهادة ===== */
+.cert-page{min-height:100vh;background:#E7EEEA;padding:24px 14px 60px}
+.cert-actions{max-width:860px;margin:0 auto 14px;display:flex;gap:8px}
+.cert{max-width:860px;margin:0 auto;background:#fff;border:10px solid var(--green);outline:2px solid var(--gold);
+  outline-offset:-18px;padding:46px 54px 38px;position:relative;overflow:hidden;box-shadow:var(--sh-2)}
+.cert::before{content:"";position:absolute;inset-inline:0;top:0;height:10px;background:var(--lv)}
+.cert-hd{display:flex;gap:14px;align-items:center;justify-content:center;margin-bottom:18px}
+.cert-hd .logo-mark svg{width:44px;height:44px}
+.cert-brand{font-size:1.25rem;font-weight:700;color:var(--green)}
+.cert-sub{font-size:.8rem;color:var(--ink-3)}
+.cert-title{text-align:center;font-size:1.7rem;color:var(--green);margin:10px 0 14px;font-family:var(--fs)}
+.cert-lead{text-align:center;color:var(--ink-2);font-family:var(--fs);font-size:1rem}
+.cert-name{text-align:center;font-size:1.9rem;font-weight:700;color:var(--ink);margin:6px 0 10px;font-family:var(--fs)}
+.cert-level{margin:16px auto;max-width:520px;border-radius:10px;overflow:hidden;text-align:center;border:1px solid var(--line)}
+.cert-level span{display:block;background:var(--lv);color:#fff;padding:8px;font-weight:700}
+.cert-level b{display:block;padding:9px;color:var(--ink);font-family:var(--fs);font-size:1.05rem}
+.cert-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin:18px 0}
+.cert-grid div{border:1px solid var(--line);border-radius:8px;padding:8px;text-align:center}
+.cert-grid small{display:block;color:var(--ink-3);font-size:.72rem}
+.cert-grid b{font-size:.92rem;color:var(--green)}
+.cert-claim{text-align:center;font-family:var(--fs);background:var(--gold-l);border-radius:8px;padding:10px;margin:0 0 16px}
+.cert-claim small{display:block;color:var(--gold-d);font-family:var(--f);font-size:.72rem}
+.cert-ft{display:flex;gap:18px;align-items:center;border-top:1px solid var(--line);padding-top:16px;font-size:.8rem;color:var(--ink-2)}
+.cert-sign{display:flex;justify-content:space-around;margin-top:22px}
+.cert-sign span{border-top:1px solid var(--ink-3);padding-top:6px;min-width:160px;text-align:center}
+.cert-wm{position:absolute;bottom:14px;inset-inline-start:20px;font-family:var(--fs);color:var(--gold);font-size:.9rem}
+.cert-void{position:absolute;top:44%;inset-inline:0;text-align:center;font-size:3rem;font-weight:700;color:rgba(163,32,32,.18);
+  transform:rotate(-14deg);pointer-events:none}
+@media(max-width:640px){.cert{padding:28px 18px}.cert-grid{grid-template-columns:1fr 1fr}.cert-ft{flex-direction:column}}
+@media print{
+  .cert-page{background:#fff;padding:0}.cert-actions{display:none!important}
+  .cert{box-shadow:none;max-width:none;margin:0}
+  @page{size:A4;margin:10mm}
+}

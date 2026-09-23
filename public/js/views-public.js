@@ -7,15 +7,16 @@ const { dataTable, bars, meter, stat, alertBox, legal, card, kv, tabs } = window
 
 function pubShell(content, active) {
   const nav = [['', 'الرئيسة'], ['registry', 'السجل العام'], ['verify', 'التحقق من ترخيص'],
-    ['calculator', 'حاسبة الالتزام'], ['levels', 'المستويات والمعايير'], ['transparency', 'الشفافية'],
-    ['report-abuse', 'بلاغ أو شكوى']];
+    ['calculator', 'حاسبة الالتزام'], ['levels', 'المستويات والمعايير'], ['consultations', 'المشاورات العامة'],
+    ['transparency', 'الشفافية'], ['report-abuse', 'بلاغ أو شكوى'], ['track', 'متابعة بلاغ']];
   return `<div class="app">
     ${window.UI.topbar()}
     <nav class="pub-nav"><div class="pub-nav-in">${nav.map(([h, t]) =>
       `<a href="#/${h}" class="${active === h ? 'on' : ''}">${E(t)}</a>`).join('')}
       <span class="spacer" style="flex:1"></span>
       ${S.user ? `<a class="btn primary sm" href="#/dashboard">لوحة العمل</a>`
-        : `<a class="btn primary sm" href="#/login">بوابة الشركاء والجمعيات</a>`}
+        : `<a class="btn gold sm" href="#/register">سجّل منشأتك أو منظمتك</a>
+           <a class="btn primary sm" href="#/login">بوابة الشركاء والجمعيات</a>`}
     </div></nav>
     ${content}
     <footer class="ft"><div class="ft-in">
@@ -28,6 +29,8 @@ function pubShell(content, active) {
       <div><b>تنويه</b>هذه نسخة تصويرية لعرض النظام.<br>البيانات افتراضية والمعايير مطابقة للّائحة.</div>
     </div></footer></div>`;
 }
+
+window.UI.pubShell = pubShell;
 
 // ---------- الرئيسة ----------
 route('', async () => {
@@ -258,6 +261,11 @@ route('verify', async (r) => {
         <td class="muted" style="white-space:normal;max-width:420px">${E(s.reason)}</td><td>${dt(s.decided_at)}</td></tr>`).join('')}
       </tbody></table></div>`) : ''}
 
+    ${card('رمز التحقق (المادة 36)', `<div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap">
+      <img src="/api/public/qr/${encodeURIComponent(isLic ? d.license_no : d.accreditation_no)}.svg" alt="رمز QR للتحقق"
+        width="132" height="132" style="border:1px solid var(--line);border-radius:8px;padding:6px;background:#fff">
+      <div style="flex:1;min-width:220px"><p>يفتح هذا الرمز صفحة السجل الخاصة بهذا القيد مباشرةً، ولا يُوجَّه إلى موقع المرخَّص له أو أي صفحة خارج سيطرة الأمانة (المادة 36/2).</p>
+      <a class="btn primary" href="#/certificate/${encodeURIComponent(isLic ? d.license_no : d.accreditation_no)}">عرض الشهادة وطباعتها</a></div></div>`)}
     <div class="btn-row"><a class="btn" href="#/verify">بحث جديد</a>
       <a class="btn" href="#/registry">السجل العام</a>
       <a class="btn danger" href="#/report-abuse">أبلغ عن مخالفة</a></div>
@@ -497,7 +505,10 @@ route('report-abuse', async () => {
       try {
         const r = await api('/complaints', { method: 'POST', body: b });
         modal({ title: 'تم تسجيل البلاغ', body: `${alertBox('ok', 'الرقم المرجعي: ' + r.reference,
-          E(r.note))}<p>احفظ الرقم المرجعي للمتابعة.</p>` });
+          E(r.note))}
+          <div class="grid g2"><div class="stat gold"><div class="k">الرقم المرجعي</div><div class="v mono">${E(r.reference)}</div></div>
+          <div class="stat gold"><div class="k">رمز المتابعة</div><div class="v mono">${E(r.tracking_code)}</div></div></div>
+          <p style="margin-top:10px">احفظ الرقمين — تتابع بهما حالة البلاغ من صفحة <a href="#/track">متابعة بلاغ</a> دون الإفصاح عن هويتك.</p>` });
         f.reset();
       } catch (er) { toast(er.message, 'danger'); }
     };
@@ -524,7 +535,8 @@ route('login', async () => {
         <div id="lerr" style="margin-top:10px"></div>
       </form>
       <p class="muted" style="font-size:.8rem;margin-top:14px">
-        <a href="#/">العودة إلى السجل العام</a> — السجل مفتوح للبحث دون تسجيل دخول.</p>
+        <a href="#/">العودة إلى السجل العام</a> — السجل مفتوح للبحث دون تسجيل دخول.<br>
+        ليس لديك حساب؟ <a href="#/register"><b>سجّل منشأتك أو منظمتك</b></a> — والاعتماد للمنظمات مجاني.</p>
     </div>
     <div class="login-r">
       <h4>حسابات تصويرية (${d.accounts.length})</h4>
