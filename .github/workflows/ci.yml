@@ -1,0 +1,23 @@
+name: الاختبارات
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: متصفح اختبارات الواجهة
+        run: npx playwright install --with-deps chromium
+      - name: كل الاختبارات (وحدات · مسارات · قواعد · وحدات مضافة · انحدار · المرحلة الثالثة · واجهة)
+        run: npm test
+      - name: بناء صورة الإنتاج
+        run: docker build -t sema-alkhayr:ci .

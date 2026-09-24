@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const { db, UPLOAD_DIR } = require('./db');
 const R = require('./rules');
 const REF = require('./reference');
+const MAIL = require('./mailer');
 
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -15,7 +16,7 @@ function nextRef(prefix, table) {
   // تفادي التصادم إن حُذف سجل سابقاً
   const col = { applications: 'reference', audits: 'reference', sanctions: 'case_no', appeals: 'reference',
     invoices: 'invoice_no', contributions: 'reference', design_approvals: 'reference', observers: 'reference',
-    integrity_notes: 'reference', complaints: 'reference', standards_proposals: 'reference' }[table];
+    integrity_notes: 'reference', complaints: 'reference', standards_proposals: 'reference', threads: 'reference' }[table];
   if (col) { let k = n; while (db.prepare(`SELECT 1 FROM ${table} WHERE ${col}=?`).get(ref)) ref = `${prefix}-${String(++k).padStart(5, '0')}`; }
   return ref;
 }
@@ -51,14 +52,19 @@ function storeUpload(file, meta) {
 function discardUpload(file) { try { if (file?.path) fs.unlinkSync(file.path); } catch { /* تجاهل */ } }
 
 // ---------- الإشعارات ----------
+/** إشعار داخل النظام، ونسخة بالبريد لمن لم يُوقف البريد في تفضيلاته */
 function notify({ user_id, role_code, title, body, severity = 'info', link = null }) {
   const st = db.prepare('INSERT INTO notifications (user_id, role_code, title, body, severity, link) VALUES (?,?,?,?,?,?)');
+  const mail = (uid) => MAIL.toUser(uid, { subject: `سِيمَا الخَيْر — ${title}`,
+    body: `${title}\n\n${body || ''}${link ? `\n\nللاطلاع: ${MAIL.publicUrl()}/${link}` : ''}` });
   if (role_code && !user_id) {
-    for (const u of db.prepare('SELECT DISTINCT user_id FROM user_roles WHERE role_code=?').all(role_code))
-      st.run(u.user_id, role_code, title, body, severity, link);
+    for (const u of db.prepare('SELECT DISTINCT user_id FROM user_roles WHERE role_code=?').all(role_code)) {
+      st.run(u.user_id, role_code, title, body, severity, link); mail(u.user_id);
+    }
     return;
   }
   st.run(user_id || null, role_code || null, title, body, severity, link);
+  if (user_id) mail(user_id);
 }
 const ownerOf = (kind, id) => db.prepare(
   'SELECT user_id FROM user_roles WHERE scope_kind=? AND scope_id=? LIMIT 1').get(kind, id)?.user_id;

@@ -34,6 +34,31 @@ function migrate() {
   addCol('observers', 'contact_email', 'contact_email TEXT');
   addCol('observers', 'motivation', 'motivation TEXT');
   addCol('contributions', 'program_preapproved', 'program_preapproved INTEGER NOT NULL DEFAULT 0');
+  // المرحلة الثالثة: التحقق بخطوتين والبريد
+  addCol('users', 'totp_secret', 'totp_secret TEXT');
+  addCol('users', 'totp_pending', 'totp_pending TEXT');
+  addCol('users', 'totp_enabled', 'totp_enabled INTEGER NOT NULL DEFAULT 0');
+  addCol('users', 'totp_last_counter', 'totp_last_counter INTEGER NOT NULL DEFAULT 0');
+  addCol('users', 'totp_recovery', 'totp_recovery TEXT');
+  addCol('users', 'email_notifications', 'email_notifications INTEGER NOT NULL DEFAULT 1');
+  syncReference();
+}
+
+/** مزامنة المراجع المضافة لاحقاً مع قاعدة قائمة: الصلاحيات الجديدة وأنواع المستندات والإعدادات */
+function syncReference() {
+  if (!db.prepare('SELECT 1 FROM roles LIMIT 1').get()) return;   // قاعدة لم تُبنَ بعد — البناء يتولاها
+  const { PERMISSIONS, ROLES } = require('./rbac');
+  const pm = db.prepare('INSERT OR IGNORE INTO permissions (code,name_ar,grp) VALUES (?,?,?)');
+  PERMISSIONS.forEach(([c, n, g]) => pm.run(c, n, g));
+  const rp = db.prepare('INSERT OR IGNORE INTO role_permissions (role_code,permission_code) VALUES (?,?)');
+  ROLES.forEach((x) => x.perms.forEach((p) => rp.run(x.code, p)));
+  const REF = require('./reference');
+  const dt = db.prepare('INSERT OR IGNORE INTO document_types (code,name_ar,applies_to,required,expires,form_no) VALUES (?,?,?,?,?,?)');
+  REF.DOC_TYPES.forEach((x) => dt.run(...x));
+  const st = db.prepare('INSERT OR IGNORE INTO settings (k,v,note) VALUES (?,?,?)');
+  st.run('require_2fa_internal', '0', 'إلزام حسابات الحوكمة والأمانة بالتحقق بخطوتين (1 = مُلزِم)');
+  st.run('mail_from', 'سِيمَا الخَيْر <no-reply@sema.ly>', 'مُرسِل البريد الصادر');
+  st.run('backup_keep', '14', 'عدد النسخ الاحتياطية المحتفَظ بها');
 }
 
 module.exports = { db, DATA_DIR, UPLOAD_DIR: path.join(DATA_DIR, 'uploads'), DB_PATH, wasFresh: fresh };

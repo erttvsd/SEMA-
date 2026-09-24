@@ -344,7 +344,11 @@ route('users', async () => {
       { t: 'الصلاحيات', cls: 'num', r: (r) => num(r.permission_count) },
       { t: 'آخر دخول', srt: 'last_login_at', r: (r) => dt(r.last_login_at) },
       { t: 'الحالة', r: (r) => tag(r.status === 'active' ? 'active' : r.status === 'suspended' ? 'suspended' : 'rejected') },
-      { t: '', r: (r) => `<button class="btn sm" onclick="event.stopPropagation();APP.editRoles(${A(r.id)},${A(r.full_name)})">الأدوار</button>` },
+      { t: 'الدخول', r: (r) => r.totp_enabled ? '<span class="tag ok" title="تحقق بخطوتين مفعَّل">خطوتان</span>' : '<span class="muted" style="font-size:.75rem">كلمة مرور</span>' },
+      { t: '', r: (r) => r.id === S.user.id ? '<span class="muted" style="font-size:.75rem">حسابك</span>' : `<div class="btn-row" style="flex-wrap:nowrap">
+        <button class="btn sm" onclick="event.stopPropagation();APP.editRoles(${A(r.id)},${A(r.full_name)})">الأدوار</button>
+        <button class="btn sm" title="إرسال رابط تعيين كلمة المرور إلى بريده" onclick="event.stopPropagation();WORK.sendReset(${A(r.id)},${A(r.full_name)})">${SEMA.ic('key')}</button>
+        ${r.totp_enabled ? `<button class="btn sm" title="إسقاط التحقق بخطوتين" onclick="event.stopPropagation();WORK.reset2fa(${A(r.id)},${A(r.full_name)})">2FA ×</button>` : ''}</div>` },
     ],
   }));
   return html;

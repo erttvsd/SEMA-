@@ -24,6 +24,7 @@ const SUITES = [
   { key: 'rules', file: 'tests/rules.test.js', server: true, timeout: 180e3 },
   { key: 'modules', file: 'tests/modules.test.js', server: true, timeout: 300e3 },
   { key: 'regression', file: 'tests/regression.test.js', server: true, timeout: 180e3 },
+  { key: 'phase3', file: 'tests/phase3.test.js', server: true, timeout: 240e3 },
   { key: 'ui', file: 'tests/ui.test.js', server: true, timeout: 600e3 },
 ];
 
@@ -118,7 +119,8 @@ function parseCounts(out) {
 (async () => {
   const started = Date.now();
   // الخادم لا يثق بـX-Forwarded-For، فكل التسجيلات تأتي من العنوان نفسه — يُرفع حدّها لنسخة الاختبار وحدها
-  const env = { ...process.env, SEMA_JOBS: '0', SEMA_REG_LIMIT: '1000' };
+  // البريد بإرسال صوري بلا شبكة، ورموز الاستعادة تُعاد في الرد لنسخة الاختبار وحدها (لا تعمل في الإنتاج)
+  const env = { ...process.env, SEMA_JOBS: '0', SEMA_REG_LIMIT: '1000', SEMA_MAIL_TRANSPORT: 'json', SEMA_TEST_EXPOSE_TOKENS: '1' };
   delete env.NODE_ENV;
   const results = [];
   let harnessError = null;

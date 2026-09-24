@@ -50,7 +50,7 @@ r.get('/rbac', requireAuth, (_req, res) => {
 
 r.get('/users', requireAuth, can('admin.users'), (req, res) => {
   const out = buildList(db, {
-    table: 'users u', columns: 'u.id, u.full_name, u.email, u.phone, u.region, u.gender, u.job_title, u.status, u.last_login_at, u.created_at',
+    table: 'users u', columns: 'u.id, u.full_name, u.email, u.phone, u.region, u.gender, u.job_title, u.status, u.last_login_at, u.created_at, u.totp_enabled',
     filters: { status: { op: 'in', col: 'u.status' }, region: { op: 'in', col: 'u.region' } },
     search: ['u.full_name', 'u.email', 'u.job_title'],
     allowSort: ['full_name', 'created_at', 'last_login_at'], defaultSort: 'u.full_name', req,
@@ -77,8 +77,9 @@ r.post('/users', requireAuth, can('admin.users'), (req, res) => {
   if (region && !['الغربية', 'الشرقية', 'الجنوبية'].includes(region)) return res.status(400).json({ error: 'المنطقة غير صالحة' });
   let id;
   try {
-    id = db.prepare(`INSERT INTO users (full_name, email, phone, password_hash, region, gender, job_title)
-        VALUES (?,?,?,?,?,?,?)`).run(String(full_name).slice(0, 160), String(email).trim(), phone || null,
+    // كلمة المرور التي تضعها الإدارة مؤقتة: يُلزَم صاحبها بتغييرها عند أول دخول
+    id = db.prepare(`INSERT INTO users (full_name, email, phone, password_hash, region, gender, job_title, must_reset)
+        VALUES (?,?,?,?,?,?,?,1)`).run(String(full_name).slice(0, 160), String(email).trim(), phone || null,
       bcrypt.hashSync(String(password), 10), region || null, ['م', 'أ'].includes(gender) ? gender : null, job_title || null).lastInsertRowid;
   } catch (e) { return res.status(409).json({ error: 'البريد مستخدم مسبقاً' }); }
   const st = db.prepare('INSERT INTO user_roles (user_id, role_code, scope_kind, scope_id) VALUES (?,?,?,?)');
@@ -164,6 +165,14 @@ r.put('/settings/:k', requireAuth, can('admin.settings'), (req, res) => {
     return res.status(422).json({ error: 'قيمة تحكمها اللائحة — تُعدَّل بمقترح تعديل معتمد من مجلس الأمناء بعد المشاورة، لا من الإعدادات' });
   if (!db.prepare('SELECT 1 FROM settings WHERE k=?').get(req.params.k)) return res.status(404).json({ error: 'إعداد غير معروف' });
   if (req.body == null || req.body.value == null || String(req.body.value).length > 500) return res.status(400).json({ error: 'قيمة غير صالحة' });
+  if (req.params.k === 'require_2fa_internal') {
+    if (!['0', '1'].includes(String(req.body.value))) return res.status(400).json({ error: 'القيمة 0 أو 1' });
+    // من يُلزم غيره يبدأ بنفسه — وإلا حُجب عن النظام فور الحفظ
+    if (String(req.body.value) === '1' && !req.user.totp_enabled)
+      return res.status(422).json({ error: 'فعّل التحقق بخطوتين لحسابك أولاً من «حسابي»، ثم ألزم به الآخرين' });
+  }
+  if (req.params.k === 'backup_keep' && !(Number.isInteger(Number(req.body.value)) && Number(req.body.value) >= 1 && Number(req.body.value) <= 365))
+    return res.status(400).json({ error: 'عدد النسخ بين 1 و365' });
   db.prepare('INSERT INTO settings (k,v,note) VALUES (?,?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v')
     .run(req.params.k, String(req.body.value), req.body.note || null);
   log(req, 'setting.update', 'setting', null, `${req.params.k} = ${req.body.value}`);

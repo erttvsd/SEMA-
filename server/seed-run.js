@@ -12,6 +12,8 @@ const nref = (p, t) => `${p}-${String(db.prepare(`SELECT COUNT(*) n FROM ${t}`).
 
 function run() {
   console.log('تصفير قاعدة البيانات…');
+  // البناء لا يُرسل بريداً: آلاف الإشعارات التصويرية تبقى داخل النظام
+  require('./mailer').setEnabled(false);
   S.reset();
   const tx = db.transaction(() => {
     console.log('البيانات المرجعية…');
@@ -44,6 +46,8 @@ function run() {
     console.log('المؤشرات الفعلية…');
     console.log('المقترحات والمشاورة والحالات المفتوحة للمسارات…');
     seedExtensions(staff, licensees, associations);
+    console.log('المراسلات والبريد والاجتماعات القادمة…');
+    require('./seed-phase3').seedPhase3();
     seedActuals();
   });
   tx();
@@ -933,6 +937,9 @@ function report() {
     ['مقترحات التعديل', 'SELECT COUNT(*) n FROM standards_proposals'],
     ['مداخلات المشاورة', 'SELECT COUNT(*) n FROM consultation_comments'],
     ['تشغيلات المهام الآلية', 'SELECT COUNT(*) n FROM job_runs'],
+    ['المراسلات', 'SELECT COUNT(*) n FROM threads'],
+    ['رسائل المراسلات', 'SELECT COUNT(*) n FROM thread_messages'],
+    ['البريد الصادر', 'SELECT COUNT(*) n FROM email_outbox'],
   ];
   for (const [label, q] of rows) console.log(String(label).padEnd(30, '.') + ' ' + t(q));
   const money = db.prepare('SELECT COALESCE(SUM(commitment_due),0) d, COALESCE(SUM(total_paid),0) p FROM commitments').get();

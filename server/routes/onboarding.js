@@ -247,6 +247,8 @@ r.post('/auth/password', requireAuth, (req, res) => {
   db.prepare("UPDATE users SET password_hash=?, password_changed_at=datetime('now'), token_version=token_version+1, must_reset=0 WHERE id=?")
     .run(bcrypt.hashSync(new_password, 10), req.user.id);
   log(req, 'user.password', 'user', req.user.id, 'تغيير كلمة المرور');
+  require('../mailer').toUser(req.user.id, { kind: 'security', subject: 'سِيمَا الخَيْر — تغيّرت كلمة المرور',
+    body: 'تغيّرت كلمة مرور حسابك الآن، وأُغلقت الجلسات الأخرى. إن لم تكن أنت فاستعمل «نسيت كلمة المرور» فوراً وراجع الأمانة.' });
   res.json({ ok: true, token: issueToken(loadUser(req.user.id)), note: 'تغيّرت كلمة المرور وأُلغيت الجلسات الأخرى.' });
 });
 
@@ -254,6 +256,7 @@ r.patch('/auth/profile', requireAuth, (req, res) => {
   const b = req.body || {};
   db.prepare('UPDATE users SET phone=COALESCE(?,phone), job_title=COALESCE(?,job_title) WHERE id=?')
     .run(clean(b.phone, 40), clean(b.job_title, 120), req.user.id);
+  if ('email_notifications' in b) db.prepare('UPDATE users SET email_notifications=? WHERE id=?').run(b.email_notifications ? 1 : 0, req.user.id);
   log(req, 'user.profile', 'user', req.user.id, 'تحديث الملف الشخصي');
   res.json(loadUser(req.user.id));
 });

@@ -532,7 +532,16 @@ route('login', async () => {
         <div class="fld" style="margin-bottom:14px"><label>كلمة المرور</label>
           <input name="password" type="password" required autocomplete="current-password" value="Sema@2026"></div>
         <button class="btn primary" style="width:100%;justify-content:center">تسجيل الدخول</button>
+        <div style="margin-top:8px;font-size:.82rem"><a href="#/forgot">نسيت كلمة المرور؟</a></div>
         <div id="lerr" style="margin-top:10px"></div>
+      </form>
+      <form id="mf" style="margin-top:16px;display:none">
+        <div class="alert info"><div><b>التحقق بخطوتين</b>أدخل الرمز المكوَّن من ستة أرقام من تطبيق المصادقة، أو أحد رموز الاسترداد.</div></div>
+        <div class="fld" style="margin:10px 0 14px"><label>رمز التحقق</label>
+          <input name="code" required autocomplete="one-time-code" inputmode="numeric" placeholder="123456"></div>
+        <button class="btn primary" style="width:100%;justify-content:center">تأكيد</button>
+        <div style="margin-top:8px;font-size:.82rem"><a href="#/login" onclick="setTimeout(()=>SEMA.render(),0)">العودة</a></div>
+        <div id="merr" style="margin-top:10px"></div>
       </form>
       <p class="muted" style="font-size:.8rem;margin-top:14px">
         <a href="#/">العودة إلى السجل العام</a> — السجل مفتوح للبحث دون تسجيل دخول.<br>
@@ -557,15 +566,29 @@ route('login', async () => {
       const b = Object.fromEntries(new FormData(e.target).entries());
       try {
         const r = await api('/auth/login', { method: 'POST', body: b });
-        S.token = r.token; localStorage.setItem('sema_token', r.token);
-        S.user = r.user;
-        S.rbac = await api('/rbac').catch(() => null);
-        S.notif = await api('/notifications').catch(() => ({ rows: [], unread: 0 }));
-        go('dashboard');
+        if (r.mfa_required) {
+          // الخطوة الثانية: رمز التطبيق — والرمز المؤقت صالح خمس دقائق ولا يصلح جلسةً
+          document.getElementById('lf').style.display = 'none';
+          const mf = document.getElementById('mf'); mf.style.display = '';
+          mf.code.focus();
+          mf.onsubmit = async (ev) => { ev.preventDefault();
+            try { await finish(await api('/auth/login/2fa', { method: 'POST', body: { mfa_token: r.mfa_token, code: mf.code.value.trim() } })); }
+            catch (er2) { document.getElementById('merr').innerHTML = alertBox('danger', 'تعذّر التحقق', E(er2.message)); } };
+          return;
+        }
+        await finish(r);
       } catch (er) {
         document.getElementById('lerr').innerHTML = alertBox('danger', 'تعذّر الدخول', E(er.message));
       }
     };
+    async function finish(r) {
+      S.token = r.token; localStorage.setItem('sema_token', r.token);
+      S.user = r.user;
+      S.rbac = await api('/rbac').catch(() => null);
+      S.notif = await api('/notifications').catch(() => ({ rows: [], unread: 0 }));
+      await SEMA.refreshCounts();
+      go(r.user.mfa_enroll_required || r.user.must_reset ? 'profile' : 'dashboard');
+    }
   }, 0);
   return html;
 });

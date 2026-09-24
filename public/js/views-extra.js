@@ -421,6 +421,7 @@ route('profile', async () => {
   if (!S.user) { location.hash = '#/login'; return ''; }
   const u = S.user;
   const pl = await api('/auth/pledges/mine').catch(() => ({ rows: [] }));
+  const mfa = await api('/auth/2fa').catch(() => ({ enabled: false, required: false }));
   const y = new Date().getFullYear();
   const signed = pl.rows.some((p) => p.kind === 'annual_interests' && p.year === y);
   const html = shell(`<div class="grid g2">
@@ -428,7 +429,9 @@ route('profile', async () => {
       <div class="fld"><label>الاسم</label><input value="${E(u.full_name)}" disabled></div>
       <div class="fld"><label>البريد</label><input value="${E(u.email)}" disabled></div>
       ${fld('phone', 'الهاتف', { val: u.phone || '' })}
-      ${fld('job_title', 'الوظيفة', { val: u.job_title || '' })}</div>
+      ${fld('job_title', 'الوظيفة', { val: u.job_title || '' })}
+      <label class="pledge" style="grid-column:1/-1"><input type="checkbox" name="email_notifications" ${u.email_notifications ? 'checked' : ''}>
+        <span>أرسل إليّ نسخة من الإشعارات بالبريد الإلكتروني — رسائل أمان الحساب تصل دائماً</span></label></div>
       <div class="btn-row" style="margin-top:12px"><button class="btn primary">حفظ</button></div></form>`)}
     ${card('تغيير كلمة المرور', `<form id="pw"><div class="form-grid">
       ${fld('current_password', 'كلمة المرور الحالية', { type: 'password', req: true })}
@@ -437,6 +440,14 @@ route('profile', async () => {
       <div class="btn-row" style="margin-top:12px"><button class="btn primary">تغيير</button></div></form>
       ${legal('تغيير كلمة المرور يُسقط كل الجلسات المفتوحة الأخرى فوراً.')}`)}
     </div>
+    ${u.must_reset ? alertBox('danger', 'كلمة مرورك مؤقتة', 'وضعت الإدارة كلمة المرور الحالية؛ غيّرها أعلاه قبل متابعة العمل — ولن يعرفها بعد ذلك أحد غيرك.') : ''}
+    ${u.mfa_enroll_required ? alertBox('danger', 'يلزم تفعيل التحقق بخطوتين', 'ألزمت الإدارة حسابات الحوكمة والأمانة بالتحقق بخطوتين؛ ولن تصل إلى بقية النظام حتى تُفعّله أدناه.') : ''}
+    ${card('التحقق بخطوتين', mfa.enabled
+      ? `${alertBox('ok', 'مفعَّل', `يُطلب رمز من تطبيق المصادقة عند كل دخول. بقي لديك <b>${mfa.recovery_left}</b> من رموز الاسترداد.`)}
+         <div class="btn-row"><button class="btn" onclick="WORK.newRecovery()">رموز استرداد جديدة</button>
+         ${mfa.required ? '<span class="muted" style="font-size:.8rem">إلزامي لحسابات الحوكمة والأمانة — لا يُعطَّل</span>' : '<button class="btn" onclick="WORK.disable2fa()">تعطيل</button>'}</div>`
+      : `${alertBox(mfa.required ? 'danger' : 'warn', 'غير مفعَّل', 'كلمة المرور وحدها لا تحمي الحساب إن تسرّبت. فعّل التحقق بخطوتين بأي تطبيق مصادقة.')}
+         <div class="btn-row"><button class="btn primary" onclick="WORK.setup2fa()">تفعيل التحقق بخطوتين</button></div>`)}
     ${card('إقرار المصالح السنوي — نموذج (12)', `
       ${signed ? alertBox('ok', `وُقِّع إقرار ${y}`, '') : alertBox('warn', `لم يُوقَّع إقرار ${y} بعد`, 'يوقّع كل عامل ومقيّم وعضو لجنة إقراراً سنوياً بالمصالح (المادة 27).')}
       <form id="if"><div class="form-grid">
@@ -455,7 +466,8 @@ route('profile', async () => {
       const b = formData(e.target);
       if (b.new_password !== b.confirm) return toast('التأكيد لا يطابق كلمة المرور الجديدة', 'danger');
       try { const r = await api('/auth/password', { method: 'POST', body: b });
-        S.token = r.token; localStorage.setItem('sema_token', r.token); toast(r.note); e.target.reset(); } catch (er) { toast(er.message, 'danger'); } };
+        S.token = r.token; localStorage.setItem('sema_token', r.token); toast(r.note); e.target.reset();
+        if (S.user.must_reset) { S.user = await api('/auth/me'); render(); } } catch (er) { toast(er.message, 'danger'); } };
     document.getElementById('if').onsubmit = async (e) => { e.preventDefault();
       const b = formData(e.target);
       try { await api('/pledges', { method: 'POST', body: { kind: 'annual_interests', year: y, has_conflict: b.has_conflict === '1', details: b.details } });

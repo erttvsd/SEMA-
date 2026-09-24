@@ -316,5 +316,46 @@ T('complianceDeadlines لسنة كبيسة (2027-12-31 ← 2028-04-29)', () => {
 section('أدوات التدوير');
 T('round2 / round4', () => { assert.equal(R.round2(1.006), 1.01); assert.equal(R.round4(0.123456), 0.1235); assert.equal(R.round2('x'), 0); });
 
+// ---------------------------------------------------------------
+section('كلمة المرور لمرة واحدة — RFC 6238 (التحقق بخطوتين)');
+const TOTP = require('../server/totp');
+const RFC_KEY = Buffer.from('12345678901234567890');
+for (const [t, code] of [[59, '94287082'], [1111111109, '07081804'], [1111111111, '14050471'], [1234567890, '89005924'],
+  [2000000000, '69279037'], [20000000000, '65353130']])
+  T(`متجه RFC 6238 عند ${t}`, () => assert.equal(TOTP.hotp(RFC_KEY, Math.floor(t / 30), 8), code));
+T('Base32 ذهاباً وإياباً', () => {
+  assert.equal(TOTP.b32encode(RFC_KEY), 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ');
+  for (let i = 0; i < 20; i++) { const b = require('crypto').randomBytes(i + 1); assert.deepEqual(TOTP.b32decode(TOTP.b32encode(b)), b); }
+});
+T('Base32 يرفض الحروف غير الصالحة', () => assert.throws(() => TOTP.b32decode('ABC1'), RangeError));
+T('الرمز الحالي يُقبل، ورمز الخطوة السابقة واللاحقة (انحراف الساعة)', () => {
+  const s = TOTP.newSecret(), now = Date.now();
+  assert.notEqual(TOTP.verify(s, TOTP.generate(s, now), 0, now), null);
+  assert.notEqual(TOTP.verify(s, TOTP.generate(s, now - 30e3), 0, now), null);
+  assert.notEqual(TOTP.verify(s, TOTP.generate(s, now + 30e3), 0, now), null);
+});
+T('رمز بعيد (خطوتان) يُرفض', () => {
+  const s = TOTP.newSecret(), now = Date.now();
+  assert.equal(TOTP.verify(s, TOTP.generate(s, now + 90e3), 0, now), null);
+});
+T('إعادة استعمال رمز مقبول تُرفض', () => {
+  const s = TOTP.newSecret(), now = Date.now(), c = TOTP.generate(s, now);
+  const ctr = TOTP.verify(s, c, 0, now);
+  assert.equal(TOTP.verify(s, c, ctr, now), null);
+});
+T('الصيغ غير الرقمية تُرفض', () => {
+  const s = TOTP.newSecret();
+  for (const bad of ['', '12345', '1234567', 'abcdef', null, undefined]) assert.equal(TOTP.verify(s, bad), null);
+});
+T('رموز الاسترداد: ثمانية فريدة، والبصمة لا تتأثر بالشرطة والحالة', () => {
+  const r = TOTP.newRecoveryCodes();
+  assert.equal(r.codes.length, 8); assert.equal(new Set(r.codes).size, 8);
+  assert.equal(TOTP.hashCode(r.codes[0].toLowerCase().replace('-', '')), r.hashes[0]);
+});
+T('رابط otpauth بالمعاملات القياسية', () => {
+  const u = TOTP.otpauthUri('ABC', 'a@b.ly');
+  assert.match(u, /^otpauth:\/\/totp\//); assert.match(u, /secret=ABC/); assert.match(u, /digits=6/); assert.match(u, /period=30/);
+});
+
 console.log(`\n======== النتيجة: ${pass} ناجح · ${fail} فاشل ========`);
 process.exit(fail ? 1 : 0);

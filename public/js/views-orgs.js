@@ -292,6 +292,12 @@ function actionBtns(d) {
     b.push(`<button class="btn gold sm" onclick="APP.decideApp(${d.id},${d.requested_level || 1})">القرار المسبَّب</button>`);
   if (has('appeal.file') && d.decision === 'reject')
     b.push(`<button class="btn sm" onclick="APP.fileAppealApp(${A(d.id)},${A(d.subject_kind)},${A(d.subject_id)})">تقديم تظلم</button>`);
+  // مراسلة مربوطة بالطلب: من صاحبه إلى الأمانة، أو من الأمانة إلى صاحبه — لا من لجنة الترخيص
+  const ownsIt = (d.subject_kind === 'licensee' && S.user.scopes.licensee.includes(d.subject_id)) ||
+    (d.subject_kind === 'association' && S.user.scopes.association.includes(d.subject_id));
+  if ((has('thread.own') && ownsIt) || has('thread.staff'))
+    b.push(`<button class="btn sm" onclick="WORK.newThread(${A({ title: 'بشأن الطلب ' + d.reference, topic: 'application:' + d.id,
+      category: d.status === 'deficiencies' ? 'deficiency' : 'inquiry', subject_kind: d.subject_kind, subject_id: d.subject_id, subject_name: d.subject_name })})">${has('thread.staff') ? 'مراسلة صاحب الطلب' : 'مراسلة الأمانة بشأن الطلب'}</button>`);
   return b.join(' ');
 }
 

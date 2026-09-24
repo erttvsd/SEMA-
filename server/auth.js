@@ -12,7 +12,8 @@ if (process.env.NODE_ENV === 'production' && SECRET === DEV_SECRET) {
 const TTL = '12h';
 
 function loadUser(userId) {
-  const u = db.prepare('SELECT id, full_name, email, phone, region, gender, job_title, status FROM users WHERE id=?').get(userId);
+  const u = db.prepare(`SELECT id, full_name, email, phone, region, gender, job_title, status, totp_enabled, email_notifications,
+    must_reset FROM users WHERE id=?`).get(userId);
   if (!u) return null;
   const rows = db.prepare(`
     SELECT ur.role_code, ur.scope_kind, ur.scope_id, r.name_ar, r.category, r.sod_function, r.description
@@ -24,6 +25,13 @@ function loadUser(userId) {
     licensee: rows.filter((r) => r.scope_kind === 'licensee').map((r) => r.scope_id),
     association: rows.filter((r) => r.scope_kind === 'association').map((r) => r.scope_id),
   };
+  u.totp_enabled = !!u.totp_enabled;
+  u.email_notifications = !!u.email_notifications;
+  u.must_reset = !!u.must_reset;
+  // حسابات الحوكمة والأمانة تُلزَم بالتحقق بخطوتين متى فعّلت الإدارة ذلك
+  u.internal = rows.some((r) => ['governance', 'executive'].includes(r.category));
+  u.mfa_enroll_required = u.internal && !u.totp_enabled &&
+    db.prepare("SELECT v FROM settings WHERE k='require_2fa_internal'").get()?.v === '1';
   return u;
 }
 
@@ -61,13 +69,48 @@ function login(email, password, ip) {
   const em = 'e:' + String(email || '').trim().toLowerCase(), ipk = 'i:' + (ip || '');
   if (throttled(em) || throttled(ipk, 20)) return { error: 'محاولات كثيرة فاشلة — أعد المحاولة بعد خمس عشرة دقيقة', status: 429 };
   const key = em;
-  const row = db.prepare('SELECT id, password_hash, status FROM users WHERE lower(email)=lower(?)').get(String(email || '').trim());
+  const row = db.prepare('SELECT id, password_hash, status, totp_enabled FROM users WHERE lower(email)=lower(?)').get(String(email || '').trim());
   if (!row || !bcrypt.compareSync(String(password || ''), row.password_hash)) { recordFail(key); recordFail(ipk); return { error: 'بيانات الدخول غير صحيحة' }; }
   attempts.delete(key);
   if (row.status !== 'active') return { error: 'الحساب موقوف — راجع الأمانة' };
-  db.prepare("UPDATE users SET last_login_at=datetime('now') WHERE id=?").run(row.id);
-  const user = loadUser(row.id);
+  if (row.totp_enabled) {
+    // الخطوة الثانية: رمز مؤقت لا يصلح إلا لإكمال الدخول خلال خمس دقائق
+    return { mfa_required: true, mfa_token: jwt.sign({ uid: row.id, purpose: 'mfa' }, SECRET, { expiresIn: '5m' }) };
+  }
+  return completeLogin(row.id);
+}
+
+function completeLogin(userId) {
+  db.prepare("UPDATE users SET last_login_at=datetime('now') WHERE id=?").run(userId);
+  const user = loadUser(userId);
   return { token: issueToken(user), user };
+}
+
+/** إكمال الدخول برمز تطبيق المصادقة أو برمز استرداد */
+function loginSecondStep(mfaToken, code, ip) {
+  let p;
+  try { p = jwt.verify(String(mfaToken || ''), SECRET); } catch { return { error: 'انتهت مهلة الخطوة الثانية — أعد تسجيل الدخول', status: 401 }; }
+  if (p.purpose !== 'mfa') return { error: 'رمز غير صالح', status: 401 };
+  const key = 'm:' + p.uid, ipk = 'i:' + (ip || '');
+  if (throttled(key) || throttled(ipk, 20)) return { error: 'محاولات كثيرة فاشلة — أعد المحاولة بعد خمس عشرة دقيقة', status: 429 };
+  const row = db.prepare('SELECT id, status, totp_enabled, totp_secret, totp_last_counter, totp_recovery FROM users WHERE id=?').get(p.uid);
+  if (!row || row.status !== 'active' || !row.totp_enabled) return { error: 'الحساب غير متاح', status: 401 };
+  const TOTP = require('./totp');
+  const c = String(code || '').trim();
+  const ctr = TOTP.verify(row.totp_secret, c, row.totp_last_counter);
+  if (ctr !== null) {
+    db.prepare('UPDATE users SET totp_last_counter=? WHERE id=?').run(ctr, row.id);
+  } else {
+    const hashes = JSON.parse(row.totp_recovery || '[]'), h = TOTP.hashCode(c);
+    const i = c.length >= 10 ? hashes.indexOf(h) : -1;
+    if (i < 0) { recordFail(key); recordFail(ipk); return { error: 'رمز التحقق غير صحيح', status: 401 }; }
+    hashes.splice(i, 1);
+    db.prepare('UPDATE users SET totp_recovery=? WHERE id=?').run(JSON.stringify(hashes), row.id);
+    require('./mailer').toUser(row.id, { kind: 'security', subject: 'سِيمَا الخَيْر — استُعمل رمز استرداد',
+      body: `دخل أحدٌ حسابك برمز استرداد. بقي لديك ${hashes.length} رموز. إن لم تكن أنت فغيّر كلمة المرور فوراً وراجع الأمانة.` });
+  }
+  attempts.delete(key);
+  return completeLogin(row.id);
 }
 
 /** يقرأ المستخدم من الترويسة إن وُجد، دون منع */
@@ -77,6 +120,7 @@ function attachUser(req, _res, next) {
   if (t) {
     try {
       const p = jwt.verify(t, SECRET);
+      if (p.purpose) throw new Error('رمز لغرض آخر');   // رمز الخطوة الثانية لا يصلح جلسةً
       const row = db.prepare('SELECT status, token_version FROM users WHERE id=?').get(p.uid);
       // الرمز يسقط بإيقاف الحساب أو بتغيير كلمة المرور (رقم إصدار الرموز يزيد عند كل تغيير)
       if (row && row.status === 'active' && (p.tv || 0) === (row.token_version || 0)) req.user = loadUser(p.uid);
@@ -121,15 +165,7 @@ function log(req, action, entity_kind, entity_id, summary, before, after) {
     req.ip || null);
 }
 
-function notify({ user_id, role_code, title, body, severity = 'info', link = null }) {
-  if (role_code && !user_id) {
-    const users = db.prepare('SELECT DISTINCT user_id FROM user_roles WHERE role_code=?').all(role_code);
-    const st = db.prepare('INSERT INTO notifications (user_id, role_code, title, body, severity, link) VALUES (?,?,?,?,?,?)');
-    for (const u of users) st.run(u.user_id, role_code, title, body, severity, link);
-    return;
-  }
-  db.prepare('INSERT INTO notifications (user_id, role_code, title, body, severity, link) VALUES (?,?,?,?,?,?)')
-    .run(user_id || null, role_code || null, title, body, severity, link);
-}
+/** مصدر واحد للإشعار (مع نسخته البريدية) في services.js */
+function notify(o) { return require('./services').notify(o); }
 
-module.exports = { passwordProblem, issueToken, login, loadUser, attachUser, requireAuth, can, hasPerm, ownsLicensee, ownsAssociation, log, notify, bcrypt };
+module.exports = { passwordProblem, issueToken, login, loginSecondStep, completeLogin, SECRET, loadUser, attachUser, requireAuth, can, hasPerm, ownsLicensee, ownsAssociation, log, notify, bcrypt };

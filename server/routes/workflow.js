@@ -429,6 +429,7 @@ r.get('/documents/:id/file', (req, res) => {
     if (!req.user) return res.status(401).json({ error: 'يلزم تسجيل الدخول' });
     const own = (d.owner_kind === 'licensee' && ownsLicensee(req.user, d.owner_id)) ||
                 (d.owner_kind === 'association' && ownsAssociation(req.user, d.owner_id)) ||
+                (d.owner_kind === 'user' && d.owner_id === req.user.id) ||
                 d.uploaded_by === req.user.id;
     if (!hasPerm(req.user, 'doc.view.all') && !own) return res.status(403).json({ error: 'غير مصرَّح' });
     if (d.confidential && !hasPerm(req.user, 'doc.view.confidential') && !own)

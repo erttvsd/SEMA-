@@ -155,6 +155,24 @@ const JOBS = {
       return n;
     },
   },
+  mail_delivery: {
+    title: 'إرسال البريد المتعثر وإعادة محاولته',
+    article: 'تشغيلي',
+    noTx: true,
+    run() { return require('./mailer').flush().attempted; },
+  },
+  database_backup: {
+    title: 'النسخ الاحتياطي اليومي لقاعدة البيانات',
+    article: 'تشغيلي',
+    noTx: true,
+    run(triggeredBy) {
+      if (triggeredBy === 'seed') return 0;     // بناء البيانات التصويرية لا يُنشئ نسخاً
+      const B = require('./backup');
+      if (B.lastWithin(20)) return 0;           // نسخة واحدة في اليوم ما لم تُطلب يدوياً
+      B.makeBackup('مهمة آلية');
+      return 1;
+    },
+  },
 };
 
 function runJobs(triggeredBy = 'scheduler', only) {
@@ -163,7 +181,8 @@ function runJobs(triggeredBy = 'scheduler', only) {
     if (only && only !== key) continue;
     const id = db.prepare('INSERT INTO job_runs (job, triggered_by) VALUES (?,?)').run(key, triggeredBy).lastInsertRowid;
     let affected = 0, details = null;
-    try { affected = db.transaction(() => job.run())(); }
+    // مهام خارج المعاملة: النسخ الاحتياطي (VACUUM INTO لا يعمل داخل معاملة) والبريد
+    try { affected = job.noTx ? job.run(triggeredBy) : db.transaction(() => job.run(triggeredBy))(); }
     catch (e) { details = 'خطأ: ' + e.message; console.error('[jobs]', key, e); }
     db.prepare("UPDATE job_runs SET finished_at=datetime('now'), affected=?, details=? WHERE id=?").run(affected, details, id);
     results.push({ job: key, title: job.title, article: job.article, affected, error: details });

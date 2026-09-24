@@ -139,7 +139,7 @@ const DOC_TYPES = [
   ['complaint_form',     'نموذج (9) بلاغ أو شكوى',                    'complaint', 0, 0, 9],
   ['meeting_minutes',    'محضر اجتماع',                               'secretariat', 0, 0, null],
   ['financial_statements','القوائم المالية السنوية للأمانة',          'secretariat', 0, 0, null],
-  ['market_test_report', 'تقرير جولة اختبار سوق',                     'secretariat', 0, 0, null],
+  ['market_test_report', 'تقرير جولة اختبار سوق',                     'secretariat', 0, 0, null],  ['correspondence',     'مرفق مراسلة مع الأمانة',                     'any', 0, 0, null],
 ];
 
 const KPIS = [

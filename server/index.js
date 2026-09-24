@@ -2,7 +2,7 @@
 const express = require('express');
 const path = require('path');
 const { db } = require('./db');
-const { login, attachUser, requireAuth, can, log } = require('./auth');
+const { login, loginSecondStep, attachUser, requireAuth, can, log } = require('./auth');
 const { runJobs, startScheduler, JOBS } = require('./jobs');
 
 const app = express();
@@ -30,11 +30,28 @@ app.use(express.json({ limit: '2mb' }));
 app.use(express.urlencoded({ extended: true, limit: '2mb' }));
 app.use((req, _res, next) => { if (req.body == null || typeof req.body !== 'object') req.body = {}; next(); });
 app.use(attachUser);
+// إلزام التحقق بخطوتين: الحساب الداخلي غير المُفعِّل له لا يصل إلا إلى إعداد حسابه حتى يُفعّله
+const MFA_OPEN = ['/api/auth/', '/api/public/', '/api/notifications', '/api/rbac', '/api/health'];
+app.use((req, res, next) => {
+  // كلمة مرور مؤقتة وضعتها الإدارة: لا عمل قبل تغييرها
+  if (req.user?.must_reset && req.path.startsWith('/api/') && !MFA_OPEN.some((p) => req.path.startsWith(p)))
+    return res.status(403).json({ error: 'كلمة مرورك مؤقتة — غيّرها من «حسابي» أولاً', code: 'PASSWORD_CHANGE_REQUIRED' });
+  if (req.user?.mfa_enroll_required && req.path.startsWith('/api/') && !MFA_OPEN.some((p) => req.path.startsWith(p)))
+    return res.status(403).json({ error: 'يلزم تفعيل التحقق بخطوتين قبل متابعة العمل — من «حسابي»', code: 'MFA_ENROLL_REQUIRED' });
+  next();
+});
 
 // ---------- الدخول ----------
 app.post('/api/auth/login', (req, res) => {
   const out = login(req.body.email, req.body.password, req.ip);
   if (out.error) return res.status(out.status || 401).json({ error: out.error });
+  if (out.user) log({ user: out.user, ip: req.ip }, 'auth.login', 'user', out.user.id, 'دخول');
+  res.json(out);
+});
+app.post('/api/auth/login/2fa', (req, res) => {
+  const out = loginSecondStep(req.body.mfa_token, req.body.code, req.ip);
+  if (out.error) return res.status(out.status || 401).json({ error: out.error });
+  log({ user: out.user, ip: req.ip }, 'auth.login', 'user', out.user.id, 'دخول بالتحقق بخطوتين');
   res.json(out);
 });
 app.get('/api/auth/me', requireAuth, (req, res) => res.json(req.user));
@@ -58,6 +75,9 @@ app.use('/api', require('./routes/workflow'));
 app.use('/api', require('./routes/oversight'));
 app.use('/api', require('./routes/reports'));
 app.use('/api', require('./routes/admin'));
+app.use('/api', require('./routes/account'));
+app.use('/api', require('./routes/threads'));
+app.use('/api', require('./routes/workspace'));
 
 // ---------- المهام الآلية ----------
 app.get('/api/jobs', requireAuth, can('admin.settings', 'admin.log'), (_req, res) => {

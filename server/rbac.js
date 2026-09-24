@@ -29,6 +29,7 @@ const PERMISSION_GROUPS = {
   finance:    'المالية',
   reports:    'التقارير والمؤشرات',
   gov:        'الحوكمة',
+  comm:       'المراسلات',
   admin:      'إدارة النظام',
 };
 
@@ -119,6 +120,10 @@ const PERMISSIONS = [
   ['admin.users',              'إدارة المستخدمين والأدوار',                  'admin'],
   ['admin.log',                'استعراض سجل التتبع',                         'admin'],
   ['admin.settings',           'إدارة إعدادات النظام',                       'admin'],
+  ['admin.backup',             'النسخ الاحتياطي وتنزيله',                    'admin'],
+  // المراسلات — لجنة الترخيص لا تراسل الطالب (يُحظر عليها التفاوض معه)
+  ['thread.own',               'مراسلة الأمانة بشأن ملفي',                  'comm'],
+  ['thread.staff',             'الرد على مراسلات الجهات باسم الأمانة',       'comm'],
 ];
 
 /**
@@ -170,7 +175,7 @@ const ROLES = [
             'doc.view.all','doc.upload.any','doc.verify','doc.view.confidential',
             'commitment.view.all','contribution.verify',
             'audit.plan','audit.execute','audit.unannounced','audit.view.all','market_test.manage',
-            'sanction.propose','sanction.view.all','report.view','report.export','complaint.triage'],
+            'sanction.propose','sanction.view.all','report.view','report.export','complaint.triage','thread.staff'],
   },
   {
     code: 'ASSESSOR', name_ar: 'مقيّم', category: 'executive',
@@ -224,21 +229,21 @@ const ROLES = [
             'audit.view.all','sanction.view.all','appeal.view.all','finance.invoice',
             'finance.view.all','finance.budget.propose','report.view','report.export','kpi.manage',
             'gov.meetings.view','gov.meetings.manage','observer.nominate','complaint.triage',
-            'admin.users','admin.log','admin.settings','design.decide','market_test.manage'],
+            'admin.users','admin.log','admin.settings','design.decide','market_test.manage','admin.backup','thread.staff'],
   },
   {
     code: 'REGISTRY_OFFICER', name_ar: 'مسؤول السجل والنظم', category: 'executive',
     sod: null, sort: 71,
     description: 'وحدة السجل والنظم: القيد والنشر وإصدار الشهادات وأرقام الترخيص ورموز التحقق.',
     perms: ['registry.view','registry.publish','app.view.all','licensee.view.all','licensee.edit.all',
-            'org.view.all','org.edit.all','doc.view.all','doc.upload.any','report.view','admin.log'],
+            'org.view.all','org.edit.all','doc.view.all','doc.upload.any','report.view','admin.log','admin.backup','thread.staff'],
   },
   {
     code: 'FINANCE_OFFICER', name_ar: 'مسؤول الوحدة المالية', category: 'executive',
     sod: null, sort: 72,
     description: 'إصدار الرسوم ومتابعة التحصيل والموازنة وتصنيف الإنفاق على الفئات الثلاث (المادة 31).',
     perms: ['registry.view','licensee.view.all','org.view.all','finance.invoice','finance.view.all',
-            'finance.budget.propose','report.view','report.export','doc.view.all','doc.upload.any'],
+            'finance.budget.propose','report.view','report.export','doc.view.all','doc.upload.any','thread.staff'],
   },
   {
     code: 'COMMS_OFFICER', name_ar: 'مسؤول الاتصال والتسويق', category: 'executive',
@@ -251,7 +256,7 @@ const ROLES = [
     sod: null, sort: 74,
     description: 'وحدة العلاقة بالمنظمات: متابعة الاعتماد وسقف الاستيعاب وتقارير الأثر.',
     perms: ['registry.view','org.view.all','org.edit.all','doc.view.all','doc.upload.any',
-            'report.view','report.export','licensee.view.all','commitment.view.all'],
+            'report.view','report.export','licensee.view.all','commitment.view.all','thread.staff'],
   },
   {
     code: 'PARTNER_BUSINESS', name_ar: 'شريك — منشأة مرخَّص لها', category: 'external',
@@ -259,7 +264,7 @@ const ROLES = [
     description: 'بوابة الشريك: الطلب والتجديد وتحميل الإثباتات وإقرار الامتثال وتسجيل المساهمات وطلب الموافقة على التصاميم والتظلم.',
     perms: ['registry.view','app.create','app.view.own','licensee.view.own','licensee.edit.own',
             'doc.upload.own','doc.view.own','commitment.declare','contribution.declare',
-            'design.submit','appeal.file','complaint.file','audit.view.own','report.view'],
+            'design.submit','appeal.file','complaint.file','audit.view.own','report.view','thread.own'],
   },
   {
     code: 'PARTNER_ASSOCIATION', name_ar: 'منظمة مجتمع مدني معتمدة', category: 'external',
@@ -267,13 +272,13 @@ const ROLES = [
     description: 'بوابة الجمعية: طلب الاعتماد مجاناً، تحميل الإثباتات، إقرار استلام المساهمات، تقارير الأثر، متابعة سقف الاستيعاب والتصنيف الإداري.',
     perms: ['registry.view','app.create','app.view.own','org.view.own','org.edit.own',
             'doc.upload.own','doc.view.own','contribution.confirm','impact.submit',
-            'appeal.file','complaint.file','audit.view.own','report.view'],
+            'appeal.file','complaint.file','audit.view.own','report.view','thread.own'],
   },
   {
     code: 'OBSERVER', name_ar: 'مراقب', category: 'external',
     sod: null, sort: 90,
     description: 'حق الحضور والمداخلة في اجتماعات المجلس، ولا صوت له ولا حق في الاطلاع على ملف فردي قيد التقييم (المادة 34).',
-    perms: ['registry.view','gov.attend','report.view'],
+    perms: ['registry.view','gov.attend','report.view','thread.own'],
   },
   {
     code: 'EXTERNAL_AUDITOR', name_ar: 'مراجع حسابات خارجي', category: 'external',

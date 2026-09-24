@@ -10,7 +10,10 @@
     "test": "node tests/run.js",
     "docs": "node scripts/gen-docs.js",
     "reset": "rm -rf storage && npm run seed",
-    "test:unit": "node tests/run.js --only=unit"
+    "test:unit": "node tests/run.js --only=unit",
+    "init": "node scripts/init.js",
+    "backup": "node scripts/backup.js",
+    "restore": "node scripts/restore.js"
   },
   "engines": {
     "node": ">=20"
@@ -21,6 +24,7 @@
     "express": "^5.2.1",
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.4.0",
+    "nodemailer": "^10.0.10",
     "qrcode": "^1.5.4"
   },
   "devDependencies": {

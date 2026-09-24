@@ -2,7 +2,7 @@
 /* ===== نواة التطبيق: الحالة، الاتصال، التوجيه، الأدوات ===== */
 const S = {
   token: localStorage.getItem('sema_token') || null,
-  user: null, ref: null, rbac: null, notif: { rows: [], unread: 0 },
+  user: null, ref: null, rbac: null, notif: { rows: [], unread: 0 }, msgs: { unread: 0, awaiting: 0 },
   route: { name: '', params: {}, query: {} },
 };
 
@@ -18,7 +18,11 @@ async function api(path, opts = {}) {
   if (res.status === 401 && S.token) { logout(); throw new Error('انتهت الجلسة — يلزم تسجيل الدخول'); }
   const ct = res.headers.get('content-type') || '';
   const data = ct.includes('json') ? await res.json() : await res.text();
-  if (!res.ok) { const e = new Error((data && data.error) || 'خطأ في الطلب'); e.data = data; e.status = res.status; throw e; }
+  if (!res.ok) {
+    // حساب داخلي أُلزم بالتحقق بخطوتين ولم يُفعّله: يُوجَّه إلى «حسابي» حتى يُفعّله
+    if (res.status === 403 && data && ['MFA_ENROLL_REQUIRED', 'PASSWORD_CHANGE_REQUIRED'].includes(data.code) && S.route.name !== 'profile') location.hash = '#/profile';
+    const e = new Error((data && data.error) || 'خطأ في الطلب'); e.data = data; e.status = res.status; throw e;
+  }
   return data;
 }
 const qs = (o) => { const p = new URLSearchParams(); for (const [k, v] of Object.entries(o || {}))
@@ -124,6 +128,10 @@ const IC = {
   paint:'M19 3H5a2 2 0 0 0-2 2v6a8 8 0 0 0 8 8h1v2h2v-2a4 4 0 0 0 4-4V5a2 2 0 0 0-2-2Z',
   out:'M15 3h4v18h-4M11 8l-4 4 4 4M7 12h9',
   search:'M11 3a8 8 0 1 0 0 16 8 8 0 0 0 0-16Zm10 18-5.5-5.5',
+  mail:'M3 5h18v14H3V5Zm0 1 9 7 9-7',
+  cal:'M4 5h16v16H4V5Zm0 5h16M8 3v4M16 3v4',
+  db:'M12 3c4.4 0 8 1.3 8 3s-3.6 3-8 3-8-1.3-8-3 3.6-3 8-3Zm-8 3v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3',
+  key:'M15 7a4 4 0 1 1-3.9 5H3v3h3v3h3v-3h2.1A4 4 0 0 1 15 7Z',
 };
 const ic = (n, cls = '') => `<svg class="${cls}" viewBox="0 0 24 24" fill="none" stroke="currentColor"
   stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="${IC[n] || IC.list}"/></svg>`;
@@ -208,9 +216,11 @@ async function boot() {
       S.user = await api('/auth/me');
       S.rbac = await api('/rbac').catch(() => null);
       S.notif = await api('/notifications').catch(() => ({ rows: [], unread: 0 }));
+      S.msgs = await api('/threads/unread').catch(() => ({ unread: 0, awaiting: 0 }));
     } catch { S.token = null; localStorage.removeItem('sema_token'); }
   }
   if (!location.hash) location.hash = S.user ? '#/dashboard' : '#/';
+  if (S.user && (S.user.mfa_enroll_required || S.user.must_reset)) location.hash = '#/profile';
   render();
 }
 window.SEMA = { S, api, qs, E, A, num, num2, money, pct, dt, yr, today, days, has, hasRole, kfmt, L, lb, tone, tag,

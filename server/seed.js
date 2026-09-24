@@ -81,6 +81,9 @@ function seedReference() {
   st.run('overhead_cap', '0.25', 'سقف المصروفات الإدارية والتسييرية (المعيار 8)');
   st.run('unannounced_min', '0.10', 'الحد الأدنى للزيارات غير المعلنة (المادة 26/1)');
   st.run('decision_matrix', JSON.stringify(DECISION_MATRIX), 'ملحق مصفوفة الصلاحيات في النظام الداخلي');
+  st.run('require_2fa_internal', '0', 'إلزام حسابات الحوكمة والأمانة بالتحقق بخطوتين (1 = مُلزِم)');
+  st.run('mail_from', 'سِيمَا الخَيْر <no-reply@sema.ly>', 'مُرسِل البريد الصادر');
+  st.run('backup_keep', '14', 'عدد النسخ الاحتياطية المحتفَظ بها');
 }
 
 const DECISION_MATRIX = {

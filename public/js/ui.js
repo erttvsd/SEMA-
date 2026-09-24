@@ -10,6 +10,7 @@ function navGroups() {
   g.push({ title: 'نظرة عامة', items: [
     ['dashboard', 'لوحة المؤشرات', 'dash'],
     ['registry', 'السجل العام', 'search'],
+    ['calendar', 'تقويم المواعيد', 'cal'],
   ] });
 
   const own = [];
@@ -21,6 +22,7 @@ function navGroups() {
   if (has('contribution.declare') || has('contribution.confirm')) own.push(['contributions', 'المساهمات', 'money']);
   if (has('design.submit')) own.push(['designs', 'الموافقة على التصاميم', 'paint']);
   if (has('impact.submit')) own.push(['contributions', 'تقارير الأثر', 'chart']);
+  if (has('thread.own') && !has('thread.staff')) own.push(['messages', 'مراسلة الأمانة', 'mail']);
   if (own.length) g.push({ title: 'بوابتي', items: dedupe(own) });
 
   const reg = [];
@@ -28,6 +30,7 @@ function navGroups() {
   if (has('org.view.all')) reg.push(['associations', 'المنظمات المعتمدة', 'org']);
   if (has('app.view.all')) reg.push(['applications', 'الطلبات ومساراتها', 'app']);
   if (has('doc.view.all')) reg.push(['documents', 'الإثباتات', 'doc']);
+  if (has('thread.staff')) reg.push(['messages', 'المراسلات الواردة', 'mail']);
   if (reg.length) g.push({ title: 'الملفات', items: reg });
 
   const ops = [];
@@ -67,6 +70,8 @@ function navGroups() {
   if (has('admin.users')) adm.push(['users', 'المستخدمون', 'users']);
   if (has('admin.log')) adm.push(['audit-log', 'سجل التتبع', 'list']);
   if (has('admin.settings') || has('admin.log')) adm.push(['jobs', 'المهام الآلية', 'gear']);
+  if (has('admin.log')) adm.push(['outbox', 'البريد الصادر', 'mail']);
+  if (has('admin.backup')) adm.push(['backups', 'النسخ الاحتياطي', 'db']);
   if (has('admin.settings')) adm.push(['settings', 'الإعدادات', 'gear']);
   g.push({ title: 'النظام', items: adm });
   return g;
@@ -98,10 +103,14 @@ function topbar() {
     <a href="#/dashboard" class="logo"><span class="logo-mark">${LOGO}</span>
       <span class="logo-txt"><b>سِيمَا الخَيْر</b><span>تَعْرِفُهُم بِسِيمَاهُم</span></span></a>
     <div class="spacer"></div>
-    <a href="#/" class="btn sm">${ic('search')} السجل العام</a>
+    ${u ? `<form class="tb-search" onsubmit="event.preventDefault();SEMA.go('search?q='+encodeURIComponent(this.q.value.trim()))">
+      ${ic('search')}<input name="q" placeholder="بحث شامل…" aria-label="بحث شامل"></form>`
+    : `<a href="#/" class="btn sm">${ic('search')} السجل العام</a>`}
+    ${u && (has('thread.own') || has('thread.staff')) ? `<a class="btn sm" href="#/messages" title="المراسلات">${ic('mail')} ${S.msgs?.unread
+      ? `<span class="pill on">${S.msgs.unread}</span>` : ''}</a>` : ''}
     <button class="btn sm" onclick="UI.notifPanel()">${ic('bell')} ${S.notif.unread
       ? `<span class="pill on">${S.notif.unread}</span>` : ''}</button>
-    ${u ? `<button class="btn sm" onclick="UI.mePanel()" title="${E(u.roles.map((r) => r.name_ar).join(' · '))}">
+    ${u ? `<button class="btn sm tb-user" onclick="UI.mePanel()" title="${E(u.roles.map((r) => r.name_ar).join(' · '))}">
       <b>${E(u.full_name.split(' ').slice(0, 2).join(' '))}</b></button>
       <button class="btn sm" onclick="SEMA.logout()">${ic('out')}</button>`
     : `<a class="btn primary sm" href="#/login">تسجيل الدخول</a>`}
