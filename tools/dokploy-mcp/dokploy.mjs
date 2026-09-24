@@ -7,6 +7,23 @@
  * أسماء الإجراءات وحقولها مأخوذة من مصدر Dokploy (apps/dokploy/server/api/routers و packages/server/src/db/schema).
  */
 
+import { ProxyAgent, fetch as ufetch } from 'undici';
+
+/**
+ * الوكيل: إن ضُبط HTTPS_PROXY (أو HTTP_PROXY) مرّ الطلب عبر نفق CONNECT — ولو كان الهدف http —
+ * لأن كثيراً من البيئات المُدارة لا تسمح بالاتصال المباشر. ويُتجاوز الوكيل لما في NO_PROXY.
+ */
+function proxyFor(target) {
+  const proxy = process.env.DOKPLOY_PROXY || process.env.HTTPS_PROXY || process.env.https_proxy || process.env.HTTP_PROXY || process.env.http_proxy;
+  if (!proxy || process.env.DOKPLOY_PROXY === 'off') return null;
+  const host = new URL(target).hostname;
+  const skip = String(process.env.NO_PROXY || process.env.no_proxy || '').split(',').map((x) => x.trim()).filter(Boolean)
+    .some((p) => p === '*' || host === p || (p.startsWith('.') && host.endsWith(p)) || (p.startsWith('*.') && host.endsWith(p.slice(1))) || (!p.includes('/') && host.endsWith('.' + p)));
+  return skip ? null : proxy;
+}
+const agents = new Map();
+const agentFor = (proxy) => { if (!agents.has(proxy)) agents.set(proxy, new ProxyAgent({ uri: proxy, requestTls: { rejectUnauthorized: true } })); return agents.get(proxy); };
+
 export class DokployError extends Error {
   constructor(message, { status, path, body } = {}) {
     super(message);
@@ -36,8 +53,13 @@ export function createClient({ url = process.env.DOKPLOY_URL, apiKey = process.e
       init.body = JSON.stringify(input ?? {});
     }
     let res;
-    try { res = await fetch(target, init); }
-    catch (e) { throw new DokployError(`تعذّر الاتصال بـ ${base}: ${e.cause?.code || e.message}`, { path: proc }); }
+    const proxy = proxyFor(target);
+    try { res = proxy ? await ufetch(target, { ...init, dispatcher: agentFor(proxy) }) : await fetch(target, init); }
+    catch (e) {
+      const c = e.cause?.code || e.cause?.message || e.message;
+      const hint = /403|407/.test(String(c)) ? ' — الوكيل رفض الاتصال: أضف الخادم إلى النطاقات المسموحة في إعدادات الشبكة' : '';
+      throw new DokployError(`تعذّر الاتصال بـ ${base}${proxy ? ' (عبر الوكيل)' : ''}: ${c}${hint}`, { path: proc });
+    }
     const text = await res.text();
     let body; try { body = text ? JSON.parse(text) : null; } catch { body = text; }
     if (!res.ok) {
