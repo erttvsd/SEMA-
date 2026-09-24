@@ -9,7 +9,8 @@ ENV NODE_ENV=production \
 
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+# better-sqlite3 يُبنى من المصدر إن لم يجد ملفاً جاهزاً — يلزمه python3 و make و g++ وقت البناء فقط
+RUN apt-get update  && apt-get install -y --no-install-recommends python3 make g++  && npm ci --omit=dev && npm cache clean --force  && apt-get purge -y python3 make g++ && apt-get autoremove -y  && rm -rf /var/lib/apt/lists/*
 
 COPY server ./server
 COPY public ./public
