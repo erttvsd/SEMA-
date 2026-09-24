@@ -605,12 +605,12 @@ async function section(title, fn) {
     r = await post('/jobs/run', dt, { job: 'no_such_job' });
     T('مهمة غير معروفة ← 400', r.status === 400, r.data);
     r = await post('/jobs/run', dt, {});
-    T('المدير يشغّل المهام العشر', r.status === 200 && r.data.results?.length === 10, r.data.results?.map((x) => x.job));
+    T('المدير يشغّل المهام الاثنتي عشرة', r.status === 200 && r.data.results?.length === 12, r.data.results?.map((x) => x.job));
     T('لا خطأ في أي مهمة', (r.data.results || []).every((x) => !x.error), (r.data.results || []).filter((x) => x.error));
     r = await post('/jobs/run', dt, { job: 'invoices_overdue' });
     T('تشغيل مهمة واحدة', r.status === 200 && r.data.results?.length === 1, r.data);
     r = await get('/jobs', dt);
-    T('سجل التشغيل يحوي المهام العشر ودوراتها', r.status === 200 && r.data.jobs?.length === 10 && r.data.runs?.length >= 11 && r.data.jobs.every((j) => j.last), { j: r.data.jobs?.length, r: r.data.runs?.length });
+    T('سجل التشغيل يحوي المهام الاثنتي عشرة ودوراتها', r.status === 200 && r.data.jobs?.length === 12 && r.data.runs?.length >= 13 && r.data.jobs.every((j) => j.last), { j: r.data.jobs?.length, r: r.data.runs?.length });
     r = await get('/jobs', await tok('partner1@sema.ly'));
     T('الشريك لا يطّلع على سجل المهام (403)', r.status === 403, r.status);
   });

@@ -11,15 +11,17 @@ const mount = (fn) => setTimeout(fn, 0);
 // ================= لوحة المؤشرات =================
 route('dashboard', async () => {
   if (!guard()) return '';
-  const d = await api('/dashboard');
+  const [d, cal, msgs] = await Promise.all([api('/dashboard'),
+    api('/calendar' + SEMA.qs({ from: today(), to: new Date(Date.now() + 14 * 864e5).toISOString().slice(0, 10) })).catch(() => null),
+    api('/threads/unread').catch(() => ({ unread: 0, awaiting: 0 }))]);
   const isPartner = d.scope === 'licensee', isOrg = d.scope === 'association';
-  let body = '';
+  let body = workBar(cal, msgs);
 
-  if (isPartner) body = partnerDash(d);
-  else if (isOrg) body = orgDash(d);
-  else if (d.scope === 'observer') body = observerDash(d);
-  else if (d.totals) body = adminDash(d);
-  else body = alertBox('info', 'لوحة مختصرة',
+  if (isPartner) body += partnerDash(d);
+  else if (isOrg) body += orgDash(d);
+  else if (d.scope === 'observer') body += observerDash(d);
+  else if (d.totals) body += adminDash(d);
+  else body += alertBox('info', 'لوحة مختصرة',
     'دورك يمنحك اطلاعاً على الصفحات المدرجة في القائمة الجانبية. ولا تُعرض هنا مؤشرات تشغيلية تخرج عن اختصاصك.');
 
   return shell(body, { title: 'لوحة المؤشرات',
@@ -27,6 +29,25 @@ route('dashboard', async () => {
     actions: has('report.view') ? '<a class="btn" href="#/reports">التقارير</a>' : '' });
 });
 
+/** شريط العمل: ما يستحق الانتباه الآن — المتجاوز والقريب من المواعيد، والمراسلات بانتظار ردّك */
+function workBar(cal, msgs) {
+  if (!cal) return '';
+  const upcoming = cal.events.filter((e) => !e.overdue).slice(0, 5);
+  const staff = has('thread.staff'), canMsg = staff || has('thread.own');
+  if (!cal.counts.overdue && !upcoming.length && !(canMsg && (msgs.awaiting || msgs.unread))) return '';
+  return `<div class="grid" style="grid-template-columns:minmax(0,2fr) minmax(0,1fr);margin-bottom:16px" id="workbar">
+    ${window.UI.card('مواعيدك خلال أسبوعين', upcoming.length ? `<div class="tbl-wrap"><table class="tbl"><tbody>${upcoming.map((e) =>
+      `<tr><td class="mono" style="width:110px">${E(e.date)}</td><td>${e.link ? `<a href="${E(e.link)}">${E(e.title)}</a>` : E(e.title)}
+        ${e.sub ? `<div class="muted" style="font-size:.76rem">${E(e.sub)}</div>` : ''}</td></tr>`).join('')}</tbody></table></div>`
+      : '<div class="empty"><b>لا مواعيد قريبة</b></div>',
+    { actions: `${cal.counts.overdue ? `<a class="tag danger" href="#/calendar">${num(cal.counts.overdue)} متجاوز</a>` : ''}
+      <a class="btn sm" href="#/calendar">التقويم</a>` })}
+    ${canMsg ? window.UI.card('المراسلات', `<div class="grid g2">
+      ${stat(staff ? 'بانتظار الأمانة' : 'بانتظار ردّك', num(msgs.awaiting), '', msgs.awaiting ? 'gold' : '')}
+      ${stat('غير مقروءة', num(msgs.unread), '', msgs.unread ? 'danger' : '')}</div>`,
+    { actions: `<a class="btn sm" href="#/messages${msgs.unread ? '?unread=1' : ''}">فتح</a>` }) : '<div></div>'}
+  </div>`;
+}
 
 function observerDash(d) {
   const o = d.observer;

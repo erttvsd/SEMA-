@@ -405,3 +405,4 @@ a.chip{color:var(--ink-2);text-decoration:none;cursor:pointer}
   .topbar-in{gap:6px;padding:8px 10px}
   .topbar .logo-txt,.topbar .tb-user{display:none}
 }
+@media(max-width:820px){ #workbar{grid-template-columns:1fr !important} }
