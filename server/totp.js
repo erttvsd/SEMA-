@@ -72,4 +72,29 @@ function newRecoveryCodes(n = 8) {
   return { codes, hashes: codes.map(hashCode) };
 }
 
-module.exports = { b32encode, b32decode, hotp, generate, verify, newSecret, otpauthUri, newRecoveryCodes, hashCode, counterAt, STEP };
+/**
+ * تشفير المفتاح في قاعدة البيانات (AES-256-GCM) بمفتاح لا يُخزَّن فيها — فالنسخة الاحتياطية المسرَّبة
+ * لا تكفي لتوليد رموز أحد. المفتاح من SEMA_DATA_KEY، وإلا اشتُق من سرّ الجلسات.
+ * تغيير أيٍّ منهما يُبطل المفاتيح القائمة: تُسقط الإدارة التحقق عن الحسابات ويُعاد تفعيله.
+ */
+const dataKey = () => crypto.createHash('sha256').update('sema-totp|' + (process.env.SEMA_DATA_KEY || require('./auth').SECRET)).digest();
+function seal(secret) {
+  if (!secret) return secret;
+  const iv = crypto.randomBytes(12), c = crypto.createCipheriv('aes-256-gcm', dataKey(), iv);
+  const enc = Buffer.concat([c.update(String(secret), 'utf8'), c.final()]);
+  return 'v1:' + Buffer.concat([iv, c.getAuthTag(), enc]).toString('base64');
+}
+function open(stored) {
+  if (!stored || !String(stored).startsWith('v1:')) return stored;   // قيمة قديمة غير مشفَّرة — تُشفَّر عند الإقلاع
+  const b = Buffer.from(String(stored).slice(3), 'base64');
+  const d = crypto.createDecipheriv('aes-256-gcm', dataKey(), b.subarray(0, 12));
+  d.setAuthTag(b.subarray(12, 28));
+  return Buffer.concat([d.update(b.subarray(28)), d.final()]).toString('utf8');
+}
+/** التحقق من رمز مقابل مفتاح مخزَّن مشفَّراً — ومفتاح لا يُفكّ (تغيّر السرّ) يُعامل كرمز خاطئ */
+function verifyStored(stored, code, lastCounter = 0) {
+  let s; try { s = open(stored); } catch { return null; }
+  return s ? verify(s, code, lastCounter) : null;
+}
+
+module.exports = { seal, open, verifyStored, b32encode, b32decode, hotp, generate, verify, newSecret, otpauthUri, newRecoveryCodes, hashCode, counterAt, STEP };

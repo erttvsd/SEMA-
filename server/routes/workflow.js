@@ -362,6 +362,8 @@ r.get('/documents', requireAuth, (req, res) => {
     extra.push('(' + parts.join(' OR ') + ')');
   }
   if (!hasPerm(req.user, 'doc.view.confidential')) extra.push('d.confidential=0');
+  const cf = S.correspondenceFilter(req.user);
+  extra.push(cf.sql); params.push(...cf.params);
   const out = buildList(db, {
     table: `documents d LEFT JOIN document_types dt ON dt.code=d.doc_type
             LEFT JOIN licensees l ON d.owner_kind='licensee' AND l.id=d.owner_id
@@ -423,8 +425,10 @@ r.post('/documents', requireAuth, upload.single('file'), (req, res) => {
 r.get('/documents/:id/file', (req, res) => {
   const d = db.prepare('SELECT * FROM documents WHERE id=?').get(Number(req.params.id));
   if (!d) return res.status(404).json({ error: 'غير موجود' });
-  // المستندات المنشورة في السجل (المعيار 14) متاحة للعموم؛ وما عداها يلزمه دخول وصلاحية
-  const isPublic = d.is_public && !d.confidential;
+  // مرفقات المراسلات بقاعدتها الخاصة؛ والمستندات المنشورة في السجل (المعيار 14) متاحة للعموم؛ وما عداها يلزمه دخول وصلاحية
+  const corr = S.correspondenceAccess(req.user, d);
+  if (corr === false) return res.status(req.user ? 403 : 401).json({ error: req.user ? 'مرفق مراسلة — غير مصرَّح' : 'يلزم تسجيل الدخول' });
+  const isPublic = (d.is_public && !d.confidential) || corr === true;
   if (!isPublic) {
     if (!req.user) return res.status(401).json({ error: 'يلزم تسجيل الدخول' });
     const own = (d.owner_kind === 'licensee' && ownsLicensee(req.user, d.owner_id)) ||

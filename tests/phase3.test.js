@@ -161,6 +161,7 @@ const file = (name, content, type) => new Blob([content], { type });
   r = await get('/auth/2fa', F.token);
   T('صفحة التفعيل متاحة له', r.status === 200 && r.data.required === true, r.data);
   T('الشريك غير معني بالإلزام', (await get('/licensees/2', p2)).status === 200);
+  T('والمراجع الخارجي مشمول بالإلزام (يطّلع على السرّي)', (await login('auditor.ext@sema.ly')).user?.mfa_enroll_required === true);
   T('المُفعِّل يعمل كالمعتاد', (await get('/licensees', ex)).status === 200);
   r = await post('/auth/2fa/disable', ex, { password: 'Exec2026x', code: TOTP.generate(exSec, Date.now() + 30e3) });
   T('لا يُعطَّل التحقق وهو إلزامي ← 422', r.status === 422, r.data);
@@ -292,17 +293,34 @@ const file = (name, content, type) => new Blob([content], { type });
   section('7. النسخ الاحتياطي');
   T('الشريك لا يصل ← 403', (await get('/backups', p1)).status === 403 && (await post('/backups', p1)).status === 403);
   T('المالية لا تصل ← 403', (await get('/backups', fin)).status === 403);
-  r = await post('/backups', reg);
+  T('ولا مسؤول السجل: النسخة تحوي كل البيانات فهي للمدير التنفيذي وحده ← 403', (await get('/backups', reg)).status === 403 && (await post('/backups', reg)).status === 403);
+  r = await post('/backups', dir);
   const bk = r.data;
-  T('مسؤول السجل والنظم يُنشئ نسخة سليمة', r.status === 201 && bk.integrity === 'ok' && /^[0-9a-f]{64}$/.test(bk.sha256) && bk.size_bytes > 100000, bk);
-  const dl = await fetch(`${B}/backups/${bk.id}/download?token=${reg}`);
+  T('المدير التنفيذي يُنشئ نسخة سليمة', r.status === 201 && bk.integrity === 'ok' && /^[0-9a-f]{64}$/.test(bk.sha256) && bk.size_bytes > 100000, bk);
+  T('نسختان متتاليتان فوراً ← 429', (await post('/backups', dir)).status === 429);
+  T('القائمة لا تكشف مسار الخادم', !('dir' in (await get('/backups', dir)).data));
+  const dl = await fetch(`${B}/backups/${bk.id}/download?token=${dir}`);
   const buf = Buffer.from(await dl.arrayBuffer());
   T('تنزيل النسخة: ملف SQLite كامل ببصمته', dl.status === 200 && buf.slice(0, 15).toString() === 'SQLite format 3' &&
     require('crypto').createHash('sha256').update(buf).digest('hex') === bk.sha256);
-  T('التنزيل لغير المخوَّل ← 403', (await fetch(`${B}/backups/${bk.id}/download?token=${p1}`)).status === 403);
-  T('نسخة غير موجودة ← 404', (await fetch(`${B}/backups/999999/download?token=${reg}`)).status === 404);
+  T('التنزيل لغير المخوَّل ← 403', (await fetch(`${B}/backups/${bk.id}/download?token=${p1}`)).status === 403 &&
+    (await fetch(`${B}/backups/${bk.id}/download?token=${reg}`)).status === 403);
+  T('نسخة غير موجودة ← 404', (await fetch(`${B}/backups/999999/download?token=${dir}`)).status === 404);
+  // النسخة المسرَّبة لا تكفي للاستيلاء على حساب: لا روابط استعادة فيها، ومفاتيح التحقق بخطوتين مشفَّرة
+  {
+    const fs = require('fs'), os = require('os'), path = require('path');
+    const f = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'sema-bk-')), 'b.db'); fs.writeFileSync(f, buf);
+    const Database = require('better-sqlite3'); const bdb = new Database(f, { readonly: true });
+    const leaks = bdb.prepare("SELECT COUNT(*) n FROM email_outbox WHERE body_text LIKE '%token=%' OR body_text LIKE '%#/reset%'").get().n;
+    const plain = bdb.prepare("SELECT COUNT(*) n FROM users WHERE (totp_secret IS NOT NULL AND totp_secret NOT LIKE 'v1:%') OR (totp_pending IS NOT NULL AND totp_pending NOT LIKE 'v1:%')").get().n;
+    const sealed = bdb.prepare("SELECT COUNT(*) n FROM users WHERE totp_secret LIKE 'v1:%'").get().n;
+    bdb.close(); fs.rmSync(path.dirname(f), { recursive: true, force: true });
+    T('النسخة بلا أي رابط استعادة', leaks === 0, leaks);
+    T('ومفاتيح التحقق بخطوتين فيها مشفَّرة لا نصاً', plain === 0 && sealed >= 1, { plain, sealed });
+  }
   T('عدد نسخ غير صالح ← 400', (await put('/settings/backup_keep', dir, { value: '0' })).status === 400);
   await put('/settings/backup_keep', dir, { value: '1' });
+  await sleep(2200);
   const bk2 = (await post('/backups', dir)).data;
   r = await get('/backups', dir);
   T('الاحتفاظ بآخر N نسخة: الأقدم تُحذف', r.data.rows.find((x) => x.id === bk2.id)?.available === true && r.data.rows.find((x) => x.id === bk.id)?.available === false, r.data.rows.map((x) => [x.id, x.available]));
@@ -313,6 +331,8 @@ const file = (name, content, type) => new Blob([content], { type });
   // =====================================================================
   section('8. البريد الصادر');
   T('الشريك لا يصل ← 403', (await get('/outbox', p1)).status === 403);
+  T('ولا حاملو سجل التتبع وحده (السجل · المجلس · المراجع الخارجي) ← 403', (await get('/outbox', reg)).status === 403 &&
+    (await get('/outbox', await tok('chair@sema.ly'))).status === 403 && (await get('/outbox', await tok('auditor.ext@sema.ly'))).status === 403);
   r = await get('/outbox?per_page=200', dir);
   T('الصندوق يعرض الناقل المضبوط', r.status === 200 && r.data.transport === 'json', r.data.transport);
   T('الرسائل الحساسة لا يُعرض متنها أبداً', r.data.rows.filter((x) => x.kind === 'password_reset').every((x) => !/token=|#\/reset/.test(x.body_text)));
@@ -334,7 +354,68 @@ const file = (name, content, type) => new Blob([content], { type });
   await call('PATCH', '/auth/profile', o1, { email_notifications: true });
 
   // =====================================================================
-  section('9. المهام الآلية والصلاحيات');
+  section('9. ثغرات المراجعة المستقلة — حراسة');
+  // (2) تغيير حالة الأحرف في المسار لا يتجاوز القيود
+  const mrEmail = `p3-mr-${stamp}@sema.ly`;
+  await post('/users', dir, { full_name: 'حساب مؤقت للاختبار', email: mrEmail, password: 'Temp2026x', roles: ['REGISTRY_OFFICER'] });
+  const mr = (await login(mrEmail, 'Temp2026x')).token;
+  const variants = ['/API/licensees', '/Api/invoices', '/aPi/threads'];
+  const vr = await Promise.all(variants.map((v) => fetch(B.replace(/\/api$/, '') + v, { headers: { authorization: 'Bearer ' + mr } }).then((x) => x.status)));
+  T('كلمة المرور المؤقتة لا تُتجاوز بتغيير حالة أحرف المسار', vr.every((x) => x === 403), vr);
+  // (3) مرفقات المراسلات: لجنتا الترخيص والتظلمات لا تفتحانها ولا تجدانها
+  const apl = await tok('appeals1@sema.ly');
+  const pubDoc = att.document_id;
+  for (const [nm, t] of [['لجنة الترخيص', lic], ['لجنة التظلمات', apl]]) {
+    const st = await Promise.all([pubDoc, internalDoc].map((id) => fetch(`${B}/documents/${id}/file?token=${t}`).then((x) => x.status)));
+    T(`${nm} لا تفتح مرفقات المراسلات ولا الداخلية منها ← 403`, st.every((x) => x === 403), st);
+    const dl2 = (await get('/documents?q=' + encodeURIComponent('مرفق') + '&per_page=200', t)).data.rows || [];
+    T(`${nm} لا تجدها في قائمة الإثباتات`, !dl2.some((d) => d.doc_type === 'correspondence'), dl2.filter((d) => d.doc_type === 'correspondence').map((d) => d.title));
+    const sr = (await get('/search?q=' + encodeURIComponent(th.reference), t)).data;
+    T(`${nm} لا تجدها بالبحث`, !(sr.groups || []).some((g) => g.key === 'documents'), (sr.groups || []).map((g) => g.key));
+    const ld = (await get('/licensees/1', t)).data.documents || [];
+    T(`${nm} لا تراها في ملف المرخَّص له`, !ld.some((d) => d.doc_type === 'correspondence'));
+  }
+  // (9) كل موظفي المراسلات يفتحون المرفق الداخلي ولو لم يملكوا صلاحية السرّي
+  const st9 = await Promise.all([dir, fin, await tok('orgrel@sema.ly')].map((t) => fetch(`${B}/documents/${internalDoc}/file?token=${t}`).then((x) => x.status)));
+  T('المدير والمالية والعلاقة بالمنظمات يفتحون المرفق الداخلي', st9.every((x) => x === 200), st9);
+  T('وصاحب الملف يرى مرفقاته في ملفه ولا يرى الداخلي', ((await get('/licensees/1', p1)).data.documents || []).some((d) => d.id === pubDoc) &&
+    !((await get('/documents?per_page=200', p1)).data.rows || []).some((d) => d.id === internalDoc));
+  // (4) نص البلاغ لا يخرج بالبريد ولا يُحفظ في الصندوق
+  const secret4 = 'سرّ-المبلّغ-' + stamp;
+  r = await post('/complaints', null, { body: `${secret4} — واقعة استعمال للعلامة على منتج خارج نطاق الترخيص`, channel: 'portal', is_anonymous: true });
+  await sleep(300);
+  const ob4 = (await get('/outbox?per_page=200&q=' + encodeURIComponent('بلاغ'), dir)).data.rows || [];
+  T('البلاغ يُبلَّغ بالبريد بلا نصه', r.status === 201 && ob4.length > 0 && ob4.every((x) => !x.body_text.includes(secret4)), { s: r.status, n: ob4.length });
+  // (6) طلب multipart مشوَّه ← 400
+  let fd6 = new FormData(); fd6.append('title', 'مرفق في حقل آخر'); fd6.append('body', 'اختبار'); fd6.append('other', file('x.pdf', '%PDF', 'application/pdf'), 'x.pdf');
+  T('ملف في حقل غير متوقع ← 400', (await call('POST', '/threads', p1, fd6)).status === 400);
+  fd6 = new FormData(); fd6.append('title', 'ملفان'); fd6.append('body', 'اختبار');
+  fd6.append('file', file('a.pdf', '%PDF', 'application/pdf'), 'a.pdf'); fd6.append('file', file('b.pdf', '%PDF', 'application/pdf'), 'b.pdf');
+  T('ملفان في حقل واحد ← 400', (await call('POST', '/threads', p1, fd6)).status === 400);
+  const trunc = await fetch(B + '/threads', { method: 'POST', headers: { authorization: 'Bearer ' + p1, 'content-type': 'multipart/form-data; boundary=XX' },
+    body: '--XX\r\nContent-Disposition: form-data; name="title"\r\n\r\nabc' });
+  T('multipart مبتور ← 400', trunc.status === 400, trunc.status);
+  // (7) الجهة لا تعرف الموظف: لا اسم ولا رقم حساب ولا فلترة بالإسناد
+  const l7 = (await get('/threads?per_page=200', p1)).data.rows;
+  T('قائمة الجهة بلا اسم الموظف المُسنَد', l7.every((x) => !x.assigned_name && !x.assigned_to));
+  const d7 = (await get('/threads/' + th.id, p1)).data;
+  T('وتفاصيلها بلا رقم حسابه', !d7.assigned_to && !d7.assigned_name && d7.messages.filter((m) => m.author_side === 'staff').every((m) => m.author_id === null));
+  T('والفلترة بالموظف لا تعمل للجهة', (await get(`/threads?assigned_to=${regMe.id}&per_page=200`, p1)).data.total === l7.length);
+  // (8) الملاحظة الداخلية لا تغيّر ما تراه الجهة
+  const before8 = (await get('/threads/' + th.id, p1)).data.updated_at;
+  await sleep(1100);
+  await post(`/threads/${th.id}/messages`, reg, { body: 'ملاحظة داخلية لا تغيّر وقت التحديث', internal: true });
+  T('الملاحظة الداخلية لا تغيّر «آخر تحديث» عند الجهة', (await get('/threads/' + th.id, p1)).data.updated_at === before8);
+  // (مشتبه) تغيير كلمة المرور يُسقط روابط الاستعادة المعلَّقة
+  const t9 = (await post('/auth/forgot', null, { email: mrEmail })).data.debug_token;
+  await post('/auth/password', mr, { current_password: 'Temp2026x', new_password: 'Mine2026y' });
+  T('تغيير كلمة المرور يُسقط رابط الاستعادة المعلَّق', (await get('/auth/reset/check?token=' + encodeURIComponent(t9))).data.valid === false);
+  T('نوع موضوع من خصائص الكائن (constructor) ← 400', (await post('/threads', p1, { title: 'موضوع مريب', body: 'اختبار', topic_kind: 'constructor', topic_id: 1 })).status === 400);
+  const sens = ((await get('/outbox?kind=password_reset&per_page=50', dir)).data.rows || [])[0];
+  T('الرسائل الأمنية لا يُعاد إرسالها ← 422', sens && (await post(`/outbox/${sens.id}/retry`, dir)).status === (sens.status === 'sent' ? 409 : 422));
+
+  // =====================================================================
+  section('10. المهام الآلية والصلاحيات');
   r = await get('/jobs', dir);
   const jk = (r.data.jobs || []).map((j) => j.key);
   T('مهمتا البريد والنسخ الاحتياطي مسجّلتان', jk.includes('mail_delivery') && jk.includes('database_backup') && jk.length === 12, jk);

@@ -445,7 +445,7 @@ r.post('/integrity-notes', requireAuth, can('integrity.note'), (req, res) => {
       board_notified_at, response_due_at) VALUES (?,?,?,?,?,date('now'),?)`).run(
     nextRef('INT', 'integrity_notes'), title, body, category || 'other', req.user.id, R.addDays(today, 90));
   notify({ role_code: 'BOARD_CHAIR', title: 'ملاحظة من لجنة حماية النزاهة',
-    body: `${title} — أمام المجلس تسعون يوماً للاستجابة`, severity: 'warning', link: '#/integrity' });
+    body: `${title} — أمام المجلس تسعون يوماً للاستجابة`, severity: 'warning', link: '#/integrity', confidential: true });
   log(req, 'integrity.note', 'integrity_note', info.lastInsertRowid, title);
   res.status(201).json(db.prepare('SELECT * FROM integrity_notes WHERE id=?').get(info.lastInsertRowid));
 });
@@ -511,7 +511,7 @@ r.post('/complaints', (req, res) => {
       VALUES (?,?,?,?,?,?,?,?,?,1,?)`).run(nextRef('CMP', 'complaints'), channel || 'portal',
     is_anonymous ? 1 : 0, is_anonymous ? null : (reporter_name || null), is_anonymous ? null : (reporter_contact || null),
     subject_kind || null, subject_id || null, subject_name || null, body, tracking);
-  notify({ role_code: 'INTEGRITY_COMMITTEE', title: 'بلاغ جديد', body: body.slice(0, 120), severity: 'warning', link: '#/complaints' });
+  notify({ role_code: 'INTEGRITY_COMMITTEE', title: 'بلاغ جديد', body: body.slice(0, 120), severity: 'warning', link: '#/complaints', confidential: true });
   notify({ role_code: 'EVAL_DIRECTOR', title: 'بلاغ جديد — يستوجب تدقيقاً فورياً 100%',
     body: 'أي ملف ورد بشأنه بلاغ أو شكوى: تدقيق ميداني 100% وفوري (المادة 25)', severity: 'danger', link: '#/complaints' });
   res.status(201).json({ reference: db.prepare('SELECT reference FROM complaints WHERE id=?').get(info.lastInsertRowid).reference,

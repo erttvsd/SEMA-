@@ -53,10 +53,12 @@ function discardUpload(file) { try { if (file?.path) fs.unlinkSync(file.path); }
 
 // ---------- الإشعارات ----------
 /** إشعار داخل النظام، ونسخة بالبريد لمن لم يُوقف البريد في تفضيلاته */
-function notify({ user_id, role_code, title, body, severity = 'info', link = null }) {
+function notify({ user_id, role_code, title, body, severity = 'info', link = null, confidential = false }) {
   const st = db.prepare('INSERT INTO notifications (user_id, role_code, title, body, severity, link) VALUES (?,?,?,?,?,?)');
+  // الإشعار السرّي (البلاغات وملاحظات النزاهة) لا يخرج متنه بالبريد ولا يُحفظ في الصندوق — عنوان ورابط فقط
+  const text = confidential ? 'لديك إشعار سرّي في النظام — سجّل الدخول للاطلاع عليه.' : (body || '');
   const mail = (uid) => MAIL.toUser(uid, { subject: `سِيمَا الخَيْر — ${title}`,
-    body: `${title}\n\n${body || ''}${link ? `\n\nللاطلاع: ${MAIL.publicUrl()}/${link}` : ''}` });
+    body: `${title}\n\n${text}${link ? `\n\nللاطلاع: ${MAIL.publicUrl()}/${link}` : ''}` });
   if (role_code && !user_id) {
     for (const u of db.prepare('SELECT DISTINCT user_id FROM user_roles WHERE role_code=?').all(role_code)) {
       st.run(u.user_id, role_code, title, body, severity, link); mail(u.user_id);
@@ -65,6 +67,28 @@ function notify({ user_id, role_code, title, body, severity = 'info', link = nul
   }
   st.run(user_id || null, role_code || null, title, body, severity, link);
   if (user_id) mail(user_id);
+}
+/**
+ * مرفقات المراسلات ليست إثباتات: لا يفتحها إلا موظفو المراسلات، وصاحب الملف لغير الداخلي منها —
+ * ولا تكفي صلاحية الاطلاع على كل الإثباتات (لجنتا الترخيص والتظلمات خارج المراسلات).
+ * يُرجع null إن لم يكن المستند مرفق مراسلة، وإلا true/false.
+ */
+function correspondenceAccess(user, d) {
+  if (!d || d.doc_type !== 'correspondence') return null;
+  if (!user) return false;
+  if (user.permissions.includes('thread.staff')) return true;
+  if (d.owner_kind === 'secretariat') return false;
+  return d.uploaded_by === user.id || (d.owner_kind === 'licensee' && user.scopes.licensee.includes(d.owner_id)) ||
+    (d.owner_kind === 'association' && user.scopes.association.includes(d.owner_id)) || (d.owner_kind === 'user' && d.owner_id === user.id);
+}
+/** شرط SQL يحجب مرفقات المراسلات عمّن لا يحق له — للقوائم والبحث */
+function correspondenceFilter(user, alias = 'd') {
+  if (user.permissions.includes('thread.staff')) return { sql: '1=1', params: [] };
+  const parts = [`COALESCE(${alias}.doc_type,'')!='correspondence'`, `${alias}.uploaded_by=?`], params = [user.id];
+  if (user.scopes.licensee.length) { parts.push(`(${alias}.owner_kind='licensee' AND ${alias}.owner_id IN (${user.scopes.licensee.map(() => '?').join(',')}))`); params.push(...user.scopes.licensee); }
+  if (user.scopes.association.length) { parts.push(`(${alias}.owner_kind='association' AND ${alias}.owner_id IN (${user.scopes.association.map(() => '?').join(',')}))`); params.push(...user.scopes.association); }
+  parts.push(`(${alias}.owner_kind='user' AND ${alias}.owner_id=?)`); params.push(user.id);
+  return { sql: '(' + parts.join(' OR ') + ')', params };
 }
 const ownerOf = (kind, id) => db.prepare(
   'SELECT user_id FROM user_roles WHERE scope_kind=? AND scope_id=? LIMIT 1').get(kind, id)?.user_id;
@@ -175,5 +199,5 @@ function hasConflict(userId, subjectId) {
       AND details LIKE ?`).get(userId, `%(الملف ${Number(subjectId)})%`);
 }
 
-module.exports = { hasConflict, today, nextRef, ALLOWED_UPLOADS, uploadAllowed, storeUpload, discardUpload, notify, ownerOf,
+module.exports = { correspondenceAccess, correspondenceFilter, hasConflict, today, nextRef, ALLOWED_UPLOADS, uploadAllowed, storeUpload, discardUpload, notify, ownerOf,
   openStages, closeStage, createApplication, createSanction };

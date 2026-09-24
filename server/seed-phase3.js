@@ -136,7 +136,7 @@ function seedPhase3() {
     `مراسلة من الأمانة: نواقص الطلب ${def.reference}\n\nأظهر فحص الاستيفاء نواقص في ملف الطلب…`, 'notification', 0, 'held', 0, held, ago(6), null);
   OUT.run(em(o1), o1, 'سِيمَا الخَيْر — رد الأمانة: كيف يُحسب سقف الاستيعاب لمنظمتنا؟', 'رد الأمانة على مراسلتكم…', 'notification', 0, 'sent', 1, null, ago(8), ago(8));
   OUT.run(em(p1), p1, 'سِيمَا الخَيْر — تغيّرت كلمة المرور', 'تغيّرت كلمة مرور حسابك الآن…', 'security', 0, 'sent', 1, null, ago(15), ago(15));
-  OUT.run(em(obsU), obsU, 'سِيمَا الخَيْر — استعادة كلمة المرور', '[محتوى أمني — مُحي بعد الإرسال]', 'password_reset', 1, 'sent', 1, null, ago(13), ago(13));
+  OUT.run(em(obsU), obsU, 'سِيمَا الخَيْر — استعادة كلمة المرور', '[محتوى أمني — لا يُحفظ في قاعدة البيانات]', 'password_reset', 1, 'sent', 1, null, ago(13), ago(13));
   OUT.run('old-contact@example.ly', null, 'سِيمَا الخَيْر — تذكير بموعد الإقرار', 'تذكير بموعد تقديم إقرار الامتثال…', 'notification', 0, 'failed', 5,
     '550 5.1.1 Recipient address rejected: mailbox unavailable', ago(10), null);
 

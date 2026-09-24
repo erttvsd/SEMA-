@@ -5,6 +5,7 @@ const fs = require('fs');
 const { db } = require('../db');
 const { can, requireAuth, hasPerm, log } = require('../auth');
 const B = require('../backup');
+const S = require('../services');
 
 const r = express.Router();
 const today = () => new Date().toISOString().slice(0, 10);
@@ -77,7 +78,8 @@ r.get('/search', requireAuth, (req, res) => {
   if (hasPerm(u, 'audit.view.all')) add('audits', 'عمليات التدقيق', ['1=1', []],
     `SELECT id, reference, audit_type, status FROM audits WHERE (reference LIKE ?) AND {SCOPE} ORDER BY id DESC LIMIT 8`,
     (x) => ({ title: x.reference, sub: x.audit_type, status: x.status, link: `#/audits?q=${encodeURIComponent(x.reference)}` }), 1);
-  if (hasPerm(u, 'doc.view.all')) add('documents', 'الإثباتات', [hasPerm(u, 'doc.view.confidential') ? '1=1' : 'confidential=0', []],
+  if (hasPerm(u, 'doc.view.all')) add('documents', 'الإثباتات', (() => { const cf = S.correspondenceFilter(u, 'documents');
+      return [`${hasPerm(u, 'doc.view.confidential') ? '1=1' : 'confidential=0'} AND ${cf.sql}`, cf.params]; })(),
     `SELECT id, title, verification FROM documents WHERE (title LIKE ? OR sha256 LIKE ?) AND {SCOPE} ORDER BY id DESC LIMIT 8`,
     (x) => ({ title: x.title, sub: 'إثبات', status: x.verification, link: `#/documents?q=${encodeURIComponent(x.title)}` }), 2);
   if (hasPerm(u, 'admin.users')) add('users', 'المستخدمون', ['1=1', []],
@@ -161,9 +163,13 @@ r.get('/calendar', requireAuth, (req, res) => {
 
 // ================= النسخ الاحتياطي =================
 r.get('/backups', requireAuth, can('admin.backup'), (_req, res) => {
-  res.json({ rows: B.list(), dir: B.BACKUP_DIR, keep: Number(db.prepare("SELECT v FROM settings WHERE k='backup_keep'").get()?.v) || 14 });
+  res.json({ rows: B.list(), keep: Number(db.prepare("SELECT v FROM settings WHERE k='backup_keep'").get()?.v) || 14 });
 });
 r.post('/backups', requireAuth, can('admin.backup'), (req, res) => {
+  // كل نسخة تحجز القاعدة لحظات — فلا أكثر من نسخة في الدقيقة (SEMA_BACKUP_MIN_SECONDS)
+  const gap = Math.max(1, Number(process.env.SEMA_BACKUP_MIN_SECONDS) || 60);
+  if (db.prepare('SELECT 1 FROM backups WHERE created_at > datetime(\'now\', ?)').get(`-${gap} seconds`))
+    return res.status(429).json({ error: 'أُنشئت نسخة قبل قليل — أعد المحاولة بعد دقيقة' });
   const b = B.makeBackup(req.user.full_name);
   log(req, 'backup.create', 'backup', b.id, `${b.file_name} · ${b.integrity}`);
   res.status(201).json(b);

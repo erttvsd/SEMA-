@@ -11,6 +11,10 @@ const TOTP = require('../totp');
 
 const r = express.Router();
 const RESET_MINUTES = 60;
+
+// ترحيل: أي مفتاح مخزَّن قبل التشفير يُشفَّر عند الإقلاع
+for (const u of db.prepare("SELECT id, totp_secret, totp_pending FROM users WHERE (totp_secret IS NOT NULL AND totp_secret NOT LIKE 'v1:%') OR (totp_pending IS NOT NULL AND totp_pending NOT LIKE 'v1:%')").all())
+  db.prepare('UPDATE users SET totp_secret=?, totp_pending=? WHERE id=?').run(TOTP.seal(TOTP.open(u.totp_secret)), TOTP.seal(TOTP.open(u.totp_pending)), u.id);
 const sha = (s) => crypto.createHash('sha256').update(String(s)).digest('hex');
 const exposeTokens = () => process.env.NODE_ENV !== 'production' && process.env.SEMA_TEST_EXPOSE_TOKENS === '1';
 const maskEmail = (e) => String(e).replace(/^(.)(.*)(@.*)$/, (_m, a, b, c) => a + '*'.repeat(Math.min(b.length, 6)) + c);
@@ -18,7 +22,9 @@ const maskEmail = (e) => String(e).replace(/^(.)(.*)(@.*)$/, (_m, a, b, c) => a 
 // حدّ طلبات الاستعادة: ثلاثة لكل بريد وعشرة لكل عنوان في الساعة — منعاً لإغراق صندوق أحد
 const hits = new Map();
 function limited(key, max) {
-  const now = Date.now(), a = (hits.get(key) || []).filter((t) => now - t < 3600e3);
+  const now = Date.now();
+  if (hits.size > 20000) for (const [k, v] of hits) if (!v.some((t) => now - t < 3600e3)) hits.delete(k);   // ذاكرة محدودة
+  const a = (hits.get(key) || []).filter((t) => now - t < 3600e3);
   a.push(now); hits.set(key, a);
   return a.length > max;
 }
@@ -45,7 +51,8 @@ const findReset = (token) => db.prepare(`SELECT pr.*, u.email, u.status FROM pas
 r.post('/auth/forgot', (req, res) => {
   const email = String(req.body.email || '').trim().toLowerCase();
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return res.status(400).json({ error: 'أدخل بريداً صالحاً' });
-  if (limited('e:' + email, 3) || limited('i:' + req.ip, 10))
+  // حدّ العنوان أولاً: من تجاوزه لا يُسجَّل له بريد جديد في الذاكرة
+  if (limited('i:' + req.ip, 10) || limited('e:' + email, 3))
     return res.status(429).json({ error: 'طلبات كثيرة — أعد المحاولة بعد ساعة' });
   const u = db.prepare("SELECT id, full_name, email, status FROM users WHERE lower(email)=? AND status='active'").get(email);
   let token = null;
@@ -114,7 +121,7 @@ r.post('/auth/2fa/setup', requireAuth, async (req, res) => {
   if (m.totp_enabled) return res.status(409).json({ error: 'التحقق بخطوتين مفعَّل بالفعل' });
   if (!reauth(req)) return res.status(422).json({ error: 'كلمة المرور غير صحيحة' });
   const secret = TOTP.newSecret();
-  db.prepare('UPDATE users SET totp_pending=? WHERE id=?').run(secret, req.user.id);
+  db.prepare('UPDATE users SET totp_pending=? WHERE id=?').run(TOTP.seal(secret), req.user.id);
   const uri = TOTP.otpauthUri(secret, req.user.email);
   const svg = await QRCode.toString(uri, { type: 'svg', margin: 1, errorCorrectionLevel: 'M', color: { dark: '#0B4533', light: '#FFFFFF' } });
   res.json({ secret, otpauth: uri, qr_svg: svg });
@@ -124,7 +131,7 @@ r.post('/auth/2fa/enable', requireAuth, (req, res) => {
   const m = mfaRow(req.user.id);
   if (m.totp_enabled) return res.status(409).json({ error: 'التحقق بخطوتين مفعَّل بالفعل' });
   if (!m.totp_pending) return res.status(422).json({ error: 'ابدأ الإعداد أولاً' });
-  const ctr = TOTP.verify(m.totp_pending, req.body.code, 0);
+  const ctr = TOTP.verifyStored(m.totp_pending, req.body.code, 0);
   if (ctr === null) return res.status(422).json({ error: 'الرمز غير صحيح — تأكد من ضبط ساعة الهاتف وأعد المحاولة' });
   const rc = TOTP.newRecoveryCodes();
   db.prepare(`UPDATE users SET totp_secret=totp_pending, totp_pending=NULL, totp_enabled=1, totp_last_counter=?, totp_recovery=? WHERE id=?`)
@@ -140,7 +147,7 @@ r.post('/auth/2fa/disable', requireAuth, (req, res) => {
   if (!m.totp_enabled) return res.status(409).json({ error: 'التحقق بخطوتين غير مفعَّل' });
   if (required2fa(req.user)) return res.status(422).json({ error: 'التحقق بخطوتين إلزامي لحسابات الحوكمة والأمانة — لا يُعطَّل' });
   if (!reauth(req)) return res.status(422).json({ error: 'كلمة المرور غير صحيحة' });
-  if (TOTP.verify(m.totp_secret, req.body.code, m.totp_last_counter) === null) return res.status(422).json({ error: 'رمز التحقق غير صحيح' });
+  if (TOTP.verifyStored(m.totp_secret, req.body.code, m.totp_last_counter) === null) return res.status(422).json({ error: 'رمز التحقق غير صحيح' });
   db.prepare('UPDATE users SET totp_enabled=0, totp_secret=NULL, totp_pending=NULL, totp_recovery=NULL, totp_last_counter=0 WHERE id=?').run(req.user.id);
   log(req, 'user.2fa.disable', 'user', req.user.id, 'تعطيل التحقق بخطوتين');
   MAIL.toUser(req.user.id, { kind: 'security', subject: 'سِيمَا الخَيْر — عُطِّل التحقق بخطوتين',
@@ -152,7 +159,7 @@ r.post('/auth/2fa/recovery', requireAuth, (req, res) => {
   const m = mfaRow(req.user.id);
   if (!m.totp_enabled) return res.status(409).json({ error: 'التحقق بخطوتين غير مفعَّل' });
   if (!reauth(req)) return res.status(422).json({ error: 'كلمة المرور غير صحيحة' });
-  const ctr = TOTP.verify(m.totp_secret, req.body.code, m.totp_last_counter);
+  const ctr = TOTP.verifyStored(m.totp_secret, req.body.code, m.totp_last_counter);
   if (ctr === null) return res.status(422).json({ error: 'رمز التحقق غير صحيح' });
   const rc = TOTP.newRecoveryCodes();
   db.prepare('UPDATE users SET totp_recovery=?, totp_last_counter=? WHERE id=?').run(JSON.stringify(rc.hashes), ctr, req.user.id);
@@ -178,7 +185,8 @@ r.post('/users/:id/2fa/reset', requireAuth, can('admin.users'), (req, res) => {
 });
 
 // ================= البريد الصادر =================
-r.get('/outbox', requireAuth, can('admin.log'), (req, res) => {
+// متون الإشعارات قد تحمل ما لا يطّلع عليه كل حامل لسجل التتبع — فالصندوق لمن يدير الإعدادات وحده
+r.get('/outbox', requireAuth, can('admin.settings'), (req, res) => {
   const out = buildList(db, {
     table: 'email_outbox m LEFT JOIN users u ON u.id=m.to_user_id',
     columns: `m.id, m.to_email, u.full_name to_name, m.subject, m.kind, m.status, m.attempts, m.last_error, m.created_at, m.sent_at,
@@ -197,6 +205,7 @@ r.post('/outbox/:id/retry', requireAuth, can('admin.settings'), async (req, res)
   const m = db.prepare('SELECT * FROM email_outbox WHERE id=?').get(Number(req.params.id));
   if (!m) return res.status(404).json({ error: 'غير موجود' });
   if (m.status === 'sent') return res.status(409).json({ error: 'أُرسلت الرسالة بالفعل' });
+  if (m.sensitive) return res.status(422).json({ error: 'رسالة أمنية لا يُحفظ متنها ولا يُعاد إرسالها — يطلب صاحبها رابطاً جديداً' });
   if (!MAIL.configured()) return res.status(422).json({ error: 'لم يُضبط خادم بريد — اضبط SEMA_SMTP_URL ثم أعد المحاولة' });
   db.prepare("UPDATE email_outbox SET attempts=0, status='queued' WHERE id=?").run(m.id);
   const after = await MAIL.deliver(m.id);

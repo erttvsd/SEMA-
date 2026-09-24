@@ -29,7 +29,8 @@ function loadUser(userId) {
   u.email_notifications = !!u.email_notifications;
   u.must_reset = !!u.must_reset;
   // حسابات الحوكمة والأمانة تُلزَم بالتحقق بخطوتين متى فعّلت الإدارة ذلك
-  u.internal = rows.some((r) => ['governance', 'executive'].includes(r.category));
+  // والمراجع الخارجي معهم: يطّلع على السرّي وعلى سجل التتبع
+  u.internal = rows.some((r) => ['governance', 'executive'].includes(r.category) || r.role_code === 'EXTERNAL_AUDITOR');
   u.mfa_enroll_required = u.internal && !u.totp_enabled &&
     db.prepare("SELECT v FROM settings WHERE k='require_2fa_internal'").get()?.v === '1';
   return u;
@@ -97,7 +98,7 @@ function loginSecondStep(mfaToken, code, ip) {
   if (!row || row.status !== 'active' || !row.totp_enabled) return { error: 'الحساب غير متاح', status: 401 };
   const TOTP = require('./totp');
   const c = String(code || '').trim();
-  const ctr = TOTP.verify(row.totp_secret, c, row.totp_last_counter);
+  const ctr = TOTP.verifyStored(row.totp_secret, c, row.totp_last_counter);
   if (ctr !== null) {
     db.prepare('UPDATE users SET totp_last_counter=? WHERE id=?').run(ctr, row.id);
   } else {

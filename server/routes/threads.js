@@ -101,13 +101,15 @@ r.get('/threads', requireAuth, (req, res) => {
     filters: { status: { op: 'in', col: 't.status' }, category: { op: 'in', col: 't.category' },
       subject_kind: { op: 'in', col: 't.subject_kind' }, subject_id: { op: 'eq', col: 't.subject_id', num: true },
       topic_kind: { op: 'in', col: 't.topic_kind' }, topic_id: { op: 'eq', col: 't.topic_id', num: true },
-      assigned_to: { op: 'eq', col: 't.assigned_to', num: true } },
+      // الإسناد شأن داخلي — لا تفلتر به الجهة فتستدلّ على الموظف
+      ...(isStaff(req.user) ? { assigned_to: { op: 'eq', col: 't.assigned_to', num: true } } : {}) },
     search: ['t.reference', 't.title', 'l.legal_name', 'o.name', 'su.full_name'],
     allowSort: ['updated_at', 'created_at', 'status'], defaultSort: 't.updated_at DESC, t.id DESC',
     req, extraWhere: extra, params: sc.params,
   });
   const stat = db.prepare(`SELECT t.status, COUNT(*) n FROM threads t ${sc.where.length ? 'WHERE ' + sc.where.join(' AND ') : ''} GROUP BY t.status`)
     .all(...sc.params.slice(0, sc.params.length - (req.query.mine === '1' && isStaff(req.user) ? 1 : 0)));
+  if (!isStaff(req.user)) for (const x of out.rows) { x.assigned_to = null; x.assigned_name = null; }
   res.json({ ...out, by_status: stat });
 });
 
@@ -141,7 +143,7 @@ r.post('/threads', requireAuth, upload.single('file'), guard((req, res) => {
   const category = CATEGORIES.includes(b.category) ? b.category : 'inquiry';
   let topic_kind = null, topic_id = null;
   if (b.topic_kind) {
-    if (!TOPICS[b.topic_kind] || kind === 'user') { S.discardUpload(req.file); return res.status(400).json({ error: 'موضوع غير صالح' }); }
+    if (!Object.hasOwn(TOPICS, String(b.topic_kind)) || kind === 'user') { S.discardUpload(req.file); return res.status(400).json({ error: 'موضوع غير صالح' }); }
     topic_id = Number(b.topic_id);
     if (!Number.isInteger(topic_id) || !TOPICS[b.topic_kind]({ kind, id }, topic_id)) { S.discardUpload(req.file); return res.status(422).json({ error: 'الموضوع المحدد لا يخص هذا الملف' }); }
     topic_kind = b.topic_kind;
@@ -180,13 +182,14 @@ r.get('/threads/:id', requireAuth, (req, res) => {
         u.full_name author_name, d.title doc_title, d.file_name doc_file, d.size_bytes doc_size
       FROM thread_messages m LEFT JOIN users u ON u.id=m.author_id LEFT JOIN documents d ON d.id=m.document_id
       WHERE m.thread_id=? ${staff ? '' : 'AND m.internal=0'} ORDER BY m.id`).all(t.id)
-    // الجهة ترى اسم الموظف ووحدته لا حسابه الشخصي — والأمانة ترى الاسم كاملاً
-    .map((m) => ({ ...m, author_name: m.author_side === 'staff' && !staff ? 'الأمانة التنفيذية' : m.author_name }));
+    // الجهة ترى «الأمانة التنفيذية» لا الموظف: لا اسمه ولا رقم حسابه — والأمانة ترى الاسم كاملاً
+    .map((m) => (m.author_side === 'staff' && !staff ? { ...m, author_name: 'الأمانة التنفيذية', author_id: null } : m));
   const topic = t.topic_kind ? { kind: t.topic_kind, id: t.topic_id, ref: TOPICS[t.topic_kind]({ kind: t.subject_kind, id: t.subject_id }, t.topic_id)?.ref,
     link: TOPIC_LINK[t.topic_kind] ? '#/' + TOPIC_LINK[t.topic_kind] + (TOPIC_LINK[t.topic_kind].endsWith('/') ? t.topic_id : '') : null } : null;
   markRead(t.id, req.user.id);
-  res.json({ ...t, subject_name: subjectName(t.subject_kind, t.subject_id), topic, messages: msgs,
-    assigned_name: t.assigned_to ? db.prepare('SELECT full_name n FROM users WHERE id=?').get(t.assigned_to)?.n : null,
+  const masked = staff ? t : { ...t, assigned_to: null, closed_by: null, created_by: t.created_by === req.user.id ? t.created_by : null };
+  res.json({ ...masked, subject_name: subjectName(t.subject_kind, t.subject_id), topic, messages: msgs,
+    assigned_name: staff && t.assigned_to ? db.prepare('SELECT full_name n FROM users WHERE id=?').get(t.assigned_to)?.n : null,
     staff_view: staff,
     staff_users: staff ? db.prepare(`SELECT DISTINCT u.id, u.full_name FROM users u JOIN user_roles ur ON ur.user_id=u.id
         WHERE u.status='active' AND ur.role_code IN (${require('../rbac').ROLES.filter((x) => x.perms.includes('thread.staff')).map((x) => `'${x.code}'`).join(',')})
@@ -208,7 +211,7 @@ r.post('/threads/:id/messages', requireAuth, upload.single('file'), guard((req, 
       .run(t.id, req.user.id, staff ? 'staff' : 'entity', internal ? 1 : 0, body, doc).lastInsertRowid;
     if (!internal) db.prepare(`UPDATE threads SET status=?, updated_at=datetime('now'), closed_at=NULL, closed_by=NULL,
         assigned_to=COALESCE(assigned_to, ?) WHERE id=?`).run(staff ? 'awaiting_entity' : 'awaiting_staff', staff ? req.user.id : null, t.id);
-    else db.prepare("UPDATE threads SET updated_at=datetime('now') WHERE id=?").run(t.id);
+    // الملاحظة الداخلية لا تغيّر ما تراه الجهة — ولا حتى وقت آخر تحديث
     markRead(t.id, req.user.id);
   });
   tx();
@@ -227,7 +230,7 @@ r.post('/threads/:id/assign', requireAuth, (req, res) => {
   const uid = Number(req.body.user_id);
   const target = uid && require('../auth').loadUser(uid);
   if (!target || target.status !== 'active' || !hasPerm(target, 'thread.staff')) return res.status(422).json({ error: 'يُسند إلى موظف يملك صلاحية المراسلات' });
-  db.prepare("UPDATE threads SET assigned_to=?, updated_at=datetime('now') WHERE id=?").run(uid, t.id);
+  db.prepare('UPDATE threads SET assigned_to=? WHERE id=?').run(uid, t.id);
   if (uid !== req.user.id) S.notify({ user_id: uid, title: 'أُسندت إليك مراسلة', body: `${t.reference}: ${t.title}`, link: `#/messages/${t.id}` });
   log(req, 'thread.assign', 'thread', t.id, `إسناد إلى ${target.full_name}`);
   res.json({ ok: true });

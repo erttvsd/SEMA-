@@ -33,10 +33,13 @@ app.use(attachUser);
 // إلزام التحقق بخطوتين: الحساب الداخلي غير المُفعِّل له لا يصل إلا إلى إعداد حسابه حتى يُفعّله
 const MFA_OPEN = ['/api/auth/', '/api/public/', '/api/notifications', '/api/rbac', '/api/health'];
 app.use((req, res, next) => {
+  // التوجيه لا يميّز حالة الأحرف (/API/… كـ/api/…) — فالمقارنة هنا بالأحرف الصغيرة كذلك، وإلا تُجووز القيد بتغييرها
+  const p0 = req.path.toLowerCase();
+  const gated = p0.startsWith('/api/') && !MFA_OPEN.some((p) => p0.startsWith(p));
   // كلمة مرور مؤقتة وضعتها الإدارة: لا عمل قبل تغييرها
-  if (req.user?.must_reset && req.path.startsWith('/api/') && !MFA_OPEN.some((p) => req.path.startsWith(p)))
+  if (req.user?.must_reset && gated)
     return res.status(403).json({ error: 'كلمة مرورك مؤقتة — غيّرها من «حسابي» أولاً', code: 'PASSWORD_CHANGE_REQUIRED' });
-  if (req.user?.mfa_enroll_required && req.path.startsWith('/api/') && !MFA_OPEN.some((p) => req.path.startsWith(p)))
+  if (req.user?.mfa_enroll_required && gated)
     return res.status(403).json({ error: 'يلزم تفعيل التحقق بخطوتين قبل متابعة العمل — من «حسابي»', code: 'MFA_ENROLL_REQUIRED' });
   next();
 });
@@ -103,6 +106,9 @@ app.get(/^\/(?!api).*/, (_req, res) => res.sendFile(path.join(__dirname, '..', '
 
 app.use((err, _req, res, _next) => {
   if (err && err.code === 'LIMIT_FILE_SIZE') return res.status(413).json({ error: 'حجم الملف يتجاوز 20 ميجابايت' });
+  // طلب multipart مشوَّه أو حقل ملف غير متوقع خطأ في المدخلات لا في الخادم
+  if (err && (err.name === 'MulterError' || /Unexpected end of form|Malformed part header|Multipart: Boundary not found|Unexpected field/i.test(err.message || '')))
+    return res.status(400).json({ error: 'صيغة المرفقات غير صالحة — ملف واحد في الحقل file' });
   if (err && err.type === 'entity.parse.failed') return res.status(400).json({ error: 'صيغة الطلب غير صالحة' });
   // مخالفة قيود قاعدة البيانات (قيمة خارج المسموح، مرجع غير موجود، حقل إلزامي) خطأ في المدخلات لا في الخادم
   if (err && /^SQLITE_CONSTRAINT/.test(err.code || '')) return res.status(400).json({ error: 'بيانات غير صالحة أو مرجع غير موجود', code: err.code });
@@ -114,6 +120,8 @@ app.use((err, _req, res, _next) => {
 const PORT = Number(process.env.PORT) || 3000;
 if (require.main === module) {
   if (process.env.SEMA_JOBS !== '0') startScheduler(Number(process.env.SEMA_JOBS_HOURS) || 6);
+  // إيقاف نظيف (docker stop · systemctl stop): تُغلق القاعدة فيُدمج سجل الكتابة فيها ولا يبقى شيء معلَّقاً
+  for (const sig of ['SIGTERM', 'SIGINT']) process.once(sig, () => { try { db.close(); } catch { /* */ } process.exit(0); });
   app.listen(PORT, '0.0.0.0', () => console.log(`نظام «سِيمَا الخَيْر» يعمل على http://localhost:${PORT}`));
 }
 module.exports = app;

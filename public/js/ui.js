@@ -70,7 +70,7 @@ function navGroups() {
   if (has('admin.users')) adm.push(['users', 'المستخدمون', 'users']);
   if (has('admin.log')) adm.push(['audit-log', 'سجل التتبع', 'list']);
   if (has('admin.settings') || has('admin.log')) adm.push(['jobs', 'المهام الآلية', 'gear']);
-  if (has('admin.log')) adm.push(['outbox', 'البريد الصادر', 'mail']);
+  if (has('admin.settings')) adm.push(['outbox', 'البريد الصادر', 'mail']);
   if (has('admin.backup')) adm.push(['backups', 'النسخ الاحتياطي', 'db']);
   if (has('admin.settings')) adm.push(['settings', 'الإعدادات', 'gear']);
   g.push({ title: 'النظام', items: adm });

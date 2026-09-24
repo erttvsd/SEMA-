@@ -3,6 +3,7 @@ const express = require('express');
 const { db } = require('../db');
 const { can, requireAuth, hasPerm, ownsLicensee, ownsAssociation, log } = require('../auth');
 const { buildList } = require('../query');
+const S = require('../services');
 const R = require('../rules');
 
 const r = express.Router();
@@ -52,8 +53,8 @@ r.get('/licensees/:id', requireAuth, (req, res) => {
   row.documents = db.prepare(`SELECT d.id,d.doc_type,dt.name_ar doc_type_name,d.title,d.file_name,d.mime_type,d.size_bytes,
       d.pages,d.issued_on,d.expires_on,d.verification,d.verified_at,d.verify_note,d.is_public,d.confidential,d.uploaded_at
       FROM documents d LEFT JOIN document_types dt ON dt.code=d.doc_type
-      WHERE d.owner_kind='licensee' AND d.owner_id=? ${confidential ? '' : 'AND d.confidential=0'}
-      ORDER BY d.uploaded_at DESC`).all(id);
+      WHERE d.owner_kind='licensee' AND d.owner_id=? ${confidential ? '' : 'AND d.confidential=0'} AND ${S.correspondenceFilter(req.user).sql}
+      ORDER BY d.uploaded_at DESC`).all(id, ...S.correspondenceFilter(req.user).params);
   row.commitments = db.prepare('SELECT * FROM commitments WHERE licensee_id=? ORDER BY fiscal_year DESC').all(id);
   row.contributions = db.prepare(`SELECT c.*, a.name association_name, ec.name_ar channel_name
       FROM contributions c LEFT JOIN associations a ON a.id=c.association_id
@@ -174,8 +175,8 @@ r.get('/associations/:id', requireAuth, (req, res) => {
   row.documents = db.prepare(`SELECT d.id,d.doc_type,dt.name_ar doc_type_name,d.title,d.file_name,d.mime_type,d.size_bytes,
       d.pages,d.issued_on,d.expires_on,d.verification,d.verified_at,d.verify_note,d.is_public,d.confidential,d.uploaded_at
       FROM documents d LEFT JOIN document_types dt ON dt.code=d.doc_type
-      WHERE d.owner_kind='association' AND d.owner_id=? ${confidential ? '' : 'AND d.confidential=0'}
-      ORDER BY d.uploaded_at DESC`).all(id);
+      WHERE d.owner_kind='association' AND d.owner_id=? ${confidential ? '' : 'AND d.confidential=0'} AND ${S.correspondenceFilter(req.user).sql}
+      ORDER BY d.uploaded_at DESC`).all(id, ...S.correspondenceFilter(req.user).params);
   row.criteria = db.prepare(`SELECT ca.*, ac.name_ar, ac.requirement_ar, ac.threshold
       FROM criteria_assessments ca JOIN accreditation_criteria ac ON ac.no=ca.criterion_no
       WHERE ca.association_id=? ORDER BY ca.cycle_year DESC, ca.criterion_no`).all(id);

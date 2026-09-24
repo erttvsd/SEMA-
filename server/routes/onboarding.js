@@ -246,6 +246,8 @@ r.post('/auth/password', requireAuth, (req, res) => {
   // الطابع الزمني بدقة الثانية: الرموز الصادرة قبل التغيير تسقط، ويُصدَر رمز جديد بعده
   db.prepare("UPDATE users SET password_hash=?, password_changed_at=datetime('now'), token_version=token_version+1, must_reset=0 WHERE id=?")
     .run(bcrypt.hashSync(new_password, 10), req.user.id);
+  // روابط الاستعادة المعلَّقة تسقط بتغيير كلمة المرور
+  db.prepare("UPDATE password_resets SET used_at=datetime('now') WHERE user_id=? AND used_at IS NULL").run(req.user.id);
   log(req, 'user.password', 'user', req.user.id, 'تغيير كلمة المرور');
   require('../mailer').toUser(req.user.id, { kind: 'security', subject: 'سِيمَا الخَيْر — تغيّرت كلمة المرور',
     body: 'تغيّرت كلمة مرور حسابك الآن، وأُغلقت الجلسات الأخرى. إن لم تكن أنت فاستعمل «نسيت كلمة المرور» فوراً وراجع الأمانة.' });

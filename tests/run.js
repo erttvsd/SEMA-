@@ -120,7 +120,7 @@ function parseCounts(out) {
   const started = Date.now();
   // الخادم لا يثق بـX-Forwarded-For، فكل التسجيلات تأتي من العنوان نفسه — يُرفع حدّها لنسخة الاختبار وحدها
   // البريد بإرسال صوري بلا شبكة، ورموز الاستعادة تُعاد في الرد لنسخة الاختبار وحدها (لا تعمل في الإنتاج)
-  const env = { ...process.env, SEMA_JOBS: '0', SEMA_REG_LIMIT: '1000', SEMA_MAIL_TRANSPORT: 'json', SEMA_TEST_EXPOSE_TOKENS: '1' };
+  const env = { ...process.env, SEMA_JOBS: '0', SEMA_REG_LIMIT: '1000', SEMA_MAIL_TRANSPORT: 'json', SEMA_TEST_EXPOSE_TOKENS: '1', SEMA_BACKUP_MIN_SECONDS: '2' };
   delete env.NODE_ENV;
   const results = [];
   let harnessError = null;

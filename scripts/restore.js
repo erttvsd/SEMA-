@@ -32,8 +32,11 @@ fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(1500)
   .catch(() => {
     fs.mkdirSync(DATA_DIR, { recursive: true });
     if (fs.existsSync(DB_PATH)) {
+      // لقطة كاملة للقاعدة الحالية — بما في ذلك ما بقي في سجل الكتابة (WAL) إن أُوقف الخادم دون إغلاق نظيف
       const aside = `${DB_PATH}.before-restore-${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}`;
-      fs.copyFileSync(DB_PATH, aside);
+      const cur = new Database(DB_PATH);
+      cur.exec(`VACUUM INTO '${aside.replace(/'/g, "''")}'`);
+      cur.close();
       console.log(`حُفظت القاعدة الحالية جانباً: ${aside}`);
     }
     for (const ext of ['-wal', '-shm']) { try { fs.unlinkSync(DB_PATH + ext); } catch { /* غير موجود */ } }

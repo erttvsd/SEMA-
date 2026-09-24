@@ -52,6 +52,10 @@ function syncReference() {
   PERMISSIONS.forEach(([c, n, g]) => pm.run(c, n, g));
   const rp = db.prepare('INSERT OR IGNORE INTO role_permissions (role_code,permission_code) VALUES (?,?)');
   ROLES.forEach((x) => x.perms.forEach((p) => rp.run(x.code, p)));
+  // وما سُحب من دور في الشيفرة يُسحب من الجدول كذلك — مصدر الحقيقة rbac.js
+  const valid = new Set(ROLES.flatMap((x) => x.perms.map((p) => x.code + '|' + p)));
+  for (const r of db.prepare('SELECT role_code, permission_code FROM role_permissions').all())
+    if (!valid.has(r.role_code + '|' + r.permission_code)) db.prepare('DELETE FROM role_permissions WHERE role_code=? AND permission_code=?').run(r.role_code, r.permission_code);
   const REF = require('./reference');
   const dt = db.prepare('INSERT OR IGNORE INTO document_types (code,name_ar,applies_to,required,expires,form_no) VALUES (?,?,?,?,?,?)');
   REF.DOC_TYPES.forEach((x) => dt.run(...x));

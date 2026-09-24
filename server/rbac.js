@@ -236,7 +236,7 @@ const ROLES = [
     sod: null, sort: 71,
     description: 'وحدة السجل والنظم: القيد والنشر وإصدار الشهادات وأرقام الترخيص ورموز التحقق.',
     perms: ['registry.view','registry.publish','app.view.all','licensee.view.all','licensee.edit.all',
-            'org.view.all','org.edit.all','doc.view.all','doc.upload.any','report.view','admin.log','admin.backup','thread.staff'],
+            'org.view.all','org.edit.all','doc.view.all','doc.upload.any','report.view','admin.log','thread.staff'],
   },
   {
     code: 'FINANCE_OFFICER', name_ar: 'مسؤول الوحدة المالية', category: 'executive',
