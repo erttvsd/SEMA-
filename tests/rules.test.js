@@ -175,8 +175,8 @@ const T = (name, cond, extra) => { if (cond) { pass++; console.log('  ✓ ' + na
     T('موعد الفصل بعد ستين يوماً', !!ap.decision_due_at);
     T('التظلم لا يوقف التنفيذ تلقائياً', ap.stay_of_execution === 0);
     r = await call(tok['partner1@sema.ly'], '/appeals', { method: 'POST',
-      body: { sanction_id: snc.id, appellant_kind: 'licensee', appellant_id: target.id, grounds: 'تظلم من غير ذي شأن' } });
-    T('يرفض تظلماً من غير صاحب الملف (403)', r.status === 403);
+      body: { sanction_id: snc.id, appellant_kind: 'licensee', appellant_id: target.id, grounds: 'تظلم مفصَّل من غير ذي شأن على جزاء لا يخص ملفه إطلاقاً' } });
+    T('يرفض تظلماً من غير صاحب الملف (403)', r.status === 403, { s: r.status, d: r.data });
     r = await call(tok['appeals1@sema.ly'], '/appeals/' + ap.id + '/decide', { method: 'POST',
       body: { decision: 'overturned',
         reason: 'ثبت من الكشف المصرفي خروج المبلغ قبل انتهاء السنة المالية، فيُحتسب عليها، وينزل العجز دون الحد الموجب للتعليق. يُلغى القرار.' } });
