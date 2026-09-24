@@ -118,10 +118,12 @@ app.use((err, _req, res, _next) => {
 });
 
 const PORT = Number(process.env.PORT) || 3000;
-if (require.main === module) {
+function start() {
   if (process.env.SEMA_JOBS !== '0') startScheduler(Number(process.env.SEMA_JOBS_HOURS) || 6);
   // إيقاف نظيف (docker stop · systemctl stop): تُغلق القاعدة فيُدمج سجل الكتابة فيها ولا يبقى شيء معلَّقاً
   for (const sig of ['SIGTERM', 'SIGINT']) process.once(sig, () => { try { db.close(); } catch { /* */ } process.exit(0); });
-  app.listen(PORT, '0.0.0.0', () => console.log(`نظام «سِيمَا الخَيْر» يعمل على http://localhost:${PORT}`));
+  return app.listen(PORT, '0.0.0.0', () => console.log(`نظام «سِيمَا الخَيْر» يعمل على http://localhost:${PORT}`));
 }
+if (require.main === module) start();
+app.start = start;
 module.exports = app;

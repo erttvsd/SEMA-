@@ -1,0 +1,23 @@
+# للنشر على Dokploy بنوع «Docker Compose» — المنافذ لا تُربط بالمضيف (Dokploy نفسه على 3000)،
+# والنطاق يُضاف من تبويب Domains إلى الخدمة sema على المنفذ 3000.
+services:
+  sema:
+    build: .
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      SEMA_DATA_DIR: /data
+      SEMA_TRUST_PROXY: "1"
+      SEMA_AUTO_SEED: ${SEMA_AUTO_SEED:-demo}
+      SEMA_DEMO: ${SEMA_DEMO:-1}
+      SEMA_PUBLIC_URL: ${SEMA_PUBLIC_URL:-https://semalibya.ly}
+      SEMA_SMTP_URL: ${SEMA_SMTP_URL:-}
+      SEMA_ADMIN_EMAIL: ${SEMA_ADMIN_EMAIL:-}
+      SEMA_ADMIN_NAME: ${SEMA_ADMIN_NAME:-}
+    volumes:
+      - sema-data:/data
+    expose:
+      - "3000"
+
+volumes:
+  sema-data:
